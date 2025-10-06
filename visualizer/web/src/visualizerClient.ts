@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { aggregateDisplayEvents } from "./eventAggregator";
 import {
   ConnectionStatus,
-  VisualizerEvent,
+  VisualizerSocketMessage,
   VisualizerState,
 } from "./visualizerTypes";
 
@@ -87,10 +87,17 @@ class VisualizerClient {
         console.warn("visualizer websocket received non-text message", event.data);
         return;
       }
+      let message: VisualizerSocketMessage;
       try {
-        const parsed = JSON.parse(event.data) as VisualizerEvent;
+        message = JSON.parse(event.data) as VisualizerSocketMessage;
+      } catch (err) {
+        console.warn("failed to parse visualizer message", err);
+        return;
+      }
+
+      if (message.type === "backlog") {
         this.setState((prev) => {
-          const events = [...prev.events, parsed].slice(-MAX_EVENTS);
+          const events = message.events.slice(-MAX_EVENTS);
           const displayEvents = aggregateDisplayEvents(events);
           return {
             connectionStatus: prev.connectionStatus,
@@ -98,9 +105,23 @@ class VisualizerClient {
             displayEvents,
           };
         });
-      } catch (err) {
-        console.warn("failed to parse visualizer event", err);
+        return;
       }
+
+      if (message.type === "event") {
+        this.setState((prev) => {
+          const events = [...prev.events, message.event].slice(-MAX_EVENTS);
+          const displayEvents = aggregateDisplayEvents(events);
+          return {
+            connectionStatus: prev.connectionStatus,
+            events,
+            displayEvents,
+          };
+        });
+        return;
+      }
+
+      console.warn("received unknown visualizer message type", message);
     };
 
     socket.onclose = () => {

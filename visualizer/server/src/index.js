@@ -11,7 +11,8 @@ const producerSockets = new Set();
 const viewerSockets = new Set();
 const backlog = [];
 
-function broadcast(message, except) {
+function broadcastEvent(eventPayload, except) {
+  const message = JSON.stringify({ type: "event", event: eventPayload });
   for (const socket of viewerSockets) {
     if (socket.readyState === socket.OPEN && socket !== except) {
       try {
@@ -23,10 +24,19 @@ function broadcast(message, except) {
   }
 }
 
-function pushBacklog(message) {
-  backlog.push(message);
+function pushBacklog(eventPayload) {
+  backlog.push(eventPayload);
   if (backlog.length > backlogLimit) {
     backlog.splice(0, backlog.length - backlogLimit);
+  }
+}
+
+function safeParseEvent(payload) {
+  try {
+    return JSON.parse(payload);
+  } catch (err) {
+    console.warn("failed to parse producer payload", err);
+    return null;
   }
 }
 
@@ -41,21 +51,22 @@ wss.on("connection", (socket, request) => {
   } else {
     viewerSockets.add(socket);
     console.log(`visualizer viewer connected (${clientDescription})`);
-    for (const message of backlog) {
-      try {
-        socket.send(message);
-      } catch (err) {
-        console.warn("failed to replay backlog to viewer", err);
-        break;
-      }
+    try {
+      socket.send(JSON.stringify({ type: "backlog", events: backlog }));
+    } catch (err) {
+      console.warn("failed to send backlog to viewer", err);
     }
   }
 
   socket.on("message", (data) => {
     const payload = typeof data === "string" ? data : data.toString();
     if (role === "producer") {
-      pushBacklog(payload);
-      broadcast(payload, null);
+      const parsed = safeParseEvent(payload);
+      if (!parsed) {
+        return;
+      }
+      pushBacklog(parsed);
+      broadcastEvent(parsed, null);
     }
   });
 

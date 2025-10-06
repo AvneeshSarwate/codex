@@ -46,3 +46,13 @@ export type VisualizerState = {
   events: VisualizerEvent[];
   displayEvents: DisplayEvent[];
 };
+
+export type VisualizerSocketMessage =
+  | {
+      type: "backlog";
+      events: VisualizerEvent[];
+    }
+  | {
+      type: "event";
+      event: VisualizerEvent;
+    };
