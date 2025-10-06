@@ -63,6 +63,11 @@ export class Thread {
   ): AsyncGenerator<ThreadEvent> {
     const { schemaPath, cleanup } = await createOutputSchemaFile(turnOptions.outputSchema);
     const options = this._threadOptions;
+    // Visualization hook: the options below mirror the runtime state the Rust
+    // agent will see. Emit the resolved `threadOptions`, `turnOptions`,
+    // `schemaPath`, and input text so a UI can show the full "conversation
+    // setup" envelope (model, sandbox mode, cwd, schema path, thread id)
+    // alongside the prompt before streaming events arrive.
     const generator = this._exec.run({
       input,
       baseUrl: this._options.baseUrl,
@@ -82,6 +87,11 @@ export class Thread {
         } catch (error) {
           throw new Error(`Failed to parse item: ${item}`, { cause: error });
         }
+        // Visualization hook: the raw event stream encodes every phase
+        // transition (`thread.*`, `turn.*`, `item.*`). Forward each parsed
+        // event along with its raw JSON and arrival timestamp so observers can
+        // maintain a synchronized timeline, annotate tool calls, and chart
+        // token usage/latency in real time.
         if (parsed.type === "thread.started") {
           this._id = parsed.thread_id;
         }
@@ -94,6 +104,11 @@ export class Thread {
 
   /** Provides the input to the agent and returns the completed turn. */
   async run(input: string, turnOptions: TurnOptions = {}): Promise<Turn> {
+    // Visualization hook: run() is the "one shot" helper that still walks the
+    // streamed event timeline. Accumulate the emitted events, final
+    // `items`, `usage`, and any `turnFailure` details here so downstream
+    // dashboards can attach aggregate statistics even when callers ignore the
+    // streamed iterator.
     const generator = this.runStreamedInternal(input, turnOptions);
     const items: ThreadItem[] = [];
     let finalResponse: string = "";
