@@ -3,6 +3,7 @@ import { CSSProperties } from "react";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
 import { useVisualizerData } from "./visualizerClient";
 import { DisplayEvent } from "./visualizerTypes";
+import { VisualizerSketch } from "./VisualizerSketch";
 
 function formatTimestamp(timestampMs: number) {
   const date = new Date(timestampMs);
@@ -107,6 +108,7 @@ export default function App() {
         <h1>Codex Agent Visualizer</h1>
         <div className="status">WebSocket status: {connectionStatus}</div>
       </header>
+      <VisualizerSketch />
       <main className="timeline">
         {displayEvents.length === 0 ? (
           <div className="empty-state">

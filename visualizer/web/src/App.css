@@ -35,6 +35,29 @@ body {
   opacity: 0.85;
 }
 
+.visualizer-sketch {
+  width: 640px;
+  height: 480px;
+  margin: 1.5rem auto 0;
+  background: radial-gradient(circle at 20% 20%, rgba(96, 165, 250, 0.18), rgba(15, 23, 42, 0.9));
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.visualizer-sketch-inner {
+  width: 100%;
+  height: 100%;
+}
+
+.visualizer-sketch-inner canvas {
+  display: block;
+}
+
 .timeline {
   flex: 1;
   padding: 1.5rem 2rem 2rem;
