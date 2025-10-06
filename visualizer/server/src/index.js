@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 
 const port = Number(process.env.CODEX_VISUALIZER_PORT ?? 4100);
-const backlogLimit = Number(process.env.CODEX_VISUALIZER_BACKLOG ?? 5000);
+const backlogLimit = Number(process.env.CODEX_VISUALIZER_BACKLOG ?? 50000);
 
 const server = createServer();
 const wss = new WebSocketServer({ server });

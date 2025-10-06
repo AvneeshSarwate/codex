@@ -40,6 +40,10 @@ function renderDisplayEvent(display: DisplayEvent) {
       }
     : event.action;
 
+  const actionJson = (
+    <pre className="event-json">{stringify(actionPayload)}</pre>
+  );
+
   return (
     <details className="event-item" key={`${event.sequence}-${event.timestampMs}`} style={accentStyle}>
       <summary className="event-summary">
@@ -75,7 +79,14 @@ function renderDisplayEvent(display: DisplayEvent) {
               <pre className="event-delta-text">{aggregated.combinedText}</pre>
             </div>
           ) : null}
-          <pre className="event-json">{stringify(actionPayload)}</pre>
+          {aggregated ? (
+            <details className="event-json-details">
+              <summary>Raw aggregated payload</summary>
+              {actionJson}
+            </details>
+          ) : (
+            actionJson
+          )}
         </section>
         <section className="event-state" style={{ background: stateBackground }}>
           <h2>State after action</h2>

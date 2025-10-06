@@ -7,7 +7,7 @@ import {
 } from "./visualizerTypes";
 
 const WEBSOCKET_URL = import.meta.env.VITE_VISUALIZER_WS ?? "ws://localhost:4100/?role=viewer";
-const MAX_EVENTS = 500;
+const MAX_EVENTS = 50000;
 const RECONNECT_DELAY_MS = 1000;
 
 type StateListener = (state: VisualizerState) => void;
