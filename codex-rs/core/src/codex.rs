@@ -27,6 +27,7 @@ use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde_json;
 use serde_json::Value;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -61,6 +62,7 @@ use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
 use crate::parse_command::parse_command;
+use crate::project_doc::discover_project_doc_paths;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
@@ -108,6 +110,8 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use crate::visualizer::AgentVisualizer;
+use crate::visualizer::SessionVisualizer;
 use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -151,6 +155,7 @@ impl Codex {
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+        let visualizer = AgentVisualizer::from_env();
 
         // Visualization hook: this is where AGENTS.md guidance (plus any
         // configured overrides) is loaded into memory before the session
@@ -160,7 +165,48 @@ impl Codex {
         // effective `config.base_instructions`. Also include
         // `config.project_doc_max_bytes`/`config.cwd` so the UI can explain how
         // the instruction block was assembled.
+        let project_doc_paths = match discover_project_doc_paths(&config) {
+            Ok(paths) => paths,
+            Err(err) => {
+                error!("failed to discover project docs for visualization: {err:#}");
+                Vec::new()
+            }
+        };
+        let project_doc_path_strings: Vec<String> = project_doc_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         let user_instructions = get_user_instructions(&config).await;
+        let instructions_source = match (
+            config.user_instructions.is_some(),
+            !project_doc_paths.is_empty(),
+        ) {
+            (true, true) => "user+project_doc",
+            (true, false) => "user",
+            (false, true) => "project_doc",
+            (false, false) => "none",
+        };
+
+        visualizer
+            .emit(
+                None,
+                "memory_bootstrap",
+                json!({
+                    "instructionsSource": instructions_source,
+                    "userInstructions": user_instructions,
+                    "projectDocPaths": project_doc_path_strings,
+                    "projectDocMaxBytes": config.project_doc_max_bytes,
+                    "baseInstructions": config.base_instructions,
+                    "cwd": config.cwd.display().to_string(),
+                }),
+                Some(json!({
+                    "model": config.model,
+                    "provider": config.model_provider,
+                    "approvalPolicy": config.approval_policy,
+                    "sandboxPolicy": config.sandbox_policy,
+                })),
+            )
+            .await;
 
         let config = Arc::new(config);
 
@@ -185,6 +231,7 @@ impl Codex {
             tx_event.clone(),
             conversation_history,
             session_source,
+            visualizer.clone(),
         )
         .await
         .map_err(|e| {
@@ -199,7 +246,28 @@ impl Codex {
         // generated `conversation_id`, selected `config.model`, provider id,
         // and sandbox/approval policies so downstream instrumentation can anchor
         // turn/task phases to a single async task identifier.
-        tokio::spawn(submission_loop(session, turn_context, config, rx_sub));
+        tokio::spawn(submission_loop(
+            session.clone(),
+            turn_context,
+            config.clone(),
+            rx_sub,
+        ));
+
+        let session_loop_state = session.visualization_state_snapshot().await;
+        session
+            .visualizer
+            .emit(
+                "session_loop_started",
+                json!({
+                    "model": config.model.clone(),
+                    "provider": config.model_provider.clone(),
+                    "sandboxPolicy": config.sandbox_policy.clone(),
+                    "approvalPolicy": config.approval_policy,
+                    "sessionSource": session_source,
+                }),
+                Some(session_loop_state),
+            )
+            .await;
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -255,6 +323,7 @@ pub(crate) struct Session {
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
     next_internal_sub_id: AtomicU64,
+    visualizer: SessionVisualizer,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -325,6 +394,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        visualizer: AgentVisualizer,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
             provider,
@@ -493,6 +563,7 @@ impl Session {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            visualizer: SessionVisualizer::new(visualizer, conversation_id),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -564,12 +635,82 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, event: Event) {
+        let event_value = match serde_json::to_value(&event) {
+            Ok(value) => value,
+            Err(err) => json!({
+                "serializationError": format!("{err:#}"),
+            }),
+        };
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
         }
+        let state = self.visualization_state_snapshot().await;
+        self.visualizer
+            .emit(
+                "protocol_event",
+                json!({ "event": event_value }),
+                Some(state),
+            )
+            .await;
+    }
+
+    async fn visualization_state_snapshot(&self) -> Value {
+        let (history_items, token_info, rate_limits) = {
+            let state = self.state.lock().await;
+            (
+                state.history.len(),
+                state.token_info.clone(),
+                state.latest_rate_limits.clone(),
+            )
+        };
+
+        let (active_tasks, turn_state) = {
+            let active = self.active_turn.lock().await;
+            if let Some(active_turn) = active.as_ref() {
+                (
+                    active_turn
+                        .tasks
+                        .iter()
+                        .map(|(sub_id, task)| {
+                            json!({
+                                "subId": sub_id,
+                                "kind": format!("{:?}", task.kind),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    Some(Arc::clone(&active_turn.turn_state)),
+                )
+            } else {
+                (Vec::new(), None)
+            }
+        };
+
+        let (pending_approvals, pending_inputs) = if let Some(turn_state) = turn_state {
+            let counts = {
+                let ts = turn_state.lock().await;
+                ts.pending_counts()
+            };
+            (counts.0, counts.1)
+        } else {
+            (0, 0)
+        };
+
+        json!({
+            "activeTasks": active_tasks,
+            "pendingApprovals": pending_approvals,
+            "pendingInputs": pending_inputs,
+            "historyItems": history_items,
+            "tokenInfo": token_info,
+            "rateLimits": rate_limits,
+        })
+    }
+
+    pub(crate) async fn emit_with_state(&self, action_type: &str, action: Value) {
+        let state = self.visualization_state_snapshot().await;
+        self.visualizer.emit(action_type, action, Some(state)).await;
     }
 
     /// Emit an exec approval request event and await the user's decision.
@@ -1702,8 +1843,20 @@ pub(crate) async fn run_task(
         }),
     };
     sess.send_event(event).await;
-
+    let input_serialized = serde_json::to_value(&input).unwrap_or(Value::Null);
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    sess.emit_with_state(
+        "task_started",
+        json!({
+            "subId": sub_id,
+            "model": turn_context.client.get_model(),
+            "reasoningEffort": turn_context.client.get_reasoning_effort(),
+            "reasoningSummary": turn_context.client.get_reasoning_summary(),
+            "input": input_serialized,
+            "cwd": turn_context.cwd.display().to_string(),
+        }),
+    )
+    .await;
     // For review threads, keep an isolated in-memory history so the
     // model sees a fresh conversation without the parent session's history.
     // For normal turns, continue recording to the session history as before.
@@ -2050,6 +2203,20 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
+    let available_tools = router
+        .specs()
+        .iter()
+        .map(|spec| spec.name().to_string())
+        .collect::<Vec<_>>();
+    sess.emit_with_state(
+        "tool_catalog_snapshot",
+        json!({
+            "subId": sub_id,
+            "tools": available_tools,
+            "parallelToolCallsEnabled": parallel_tool_calls,
+        }),
+    )
+    .await;
     // Visualization hook: this prompt object is the exact LLM request payload
     // (messages, tool specs, streaming flags, JSON schema). Capture the full
     // `prompt.input` (with role/source annotations), `prompt.tools`
@@ -2062,6 +2229,21 @@ async fn run_turn(
         base_instructions_override: turn_context.base_instructions.clone(),
         output_schema: turn_context.final_output_json_schema.clone(),
     };
+    let prompt_input_value = serde_json::to_value(&prompt.input).unwrap_or(Value::Null);
+    let base_override = prompt.base_instructions_override.clone();
+    let output_schema = prompt.output_schema.clone();
+    sess.emit_with_state(
+        "llm_prompt_prepared",
+        json!({
+            "subId": sub_id,
+            "model": turn_context.client.get_model(),
+            "parallelToolCalls": parallel_tool_calls,
+            "input": prompt_input_value,
+            "baseInstructionsOverride": base_override,
+            "outputSchema": output_schema,
+        }),
+    )
+    .await;
 
     let mut retries = 0;
     // Visualization hook: record retry attempts and elapsed time so latency
@@ -2079,7 +2261,20 @@ async fn run_turn(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok(output) => {
+                let processed_count = output.processed_items.len();
+                let token_usage = output.total_token_usage.clone();
+                sess.emit_with_state(
+                    "llm_response_complete",
+                    json!({
+                        "subId": sub_id,
+                        "processedItemCount": processed_count,
+                        "tokenUsage": token_usage,
+                    }),
+                )
+                .await;
+                return Ok(output);
+            }
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ CodexErr::Fatal(_)) => return Err(e),
@@ -2121,6 +2316,17 @@ async fn run_turn(
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
                         ),
+                    )
+                    .await;
+                    sess.emit_with_state(
+                        "llm_retry_scheduled",
+                        json!({
+                            "subId": sub_id,
+                            "error": format!("{e:?}"),
+                            "retries": retries,
+                            "maxRetries": max_retries,
+                            "delayMs": delay.as_millis(),
+                        }),
                     )
                     .await;
 
@@ -2226,11 +2432,35 @@ async fn try_run_turn(
         summary: turn_context.client.get_reasoning_summary(),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
+    sess.emit_with_state(
+        "turn_context_persisted",
+        json!({
+            "subId": sub_id,
+            "cwd": turn_context.cwd.display().to_string(),
+            "approvalPolicy": turn_context.approval_policy,
+            "sandboxPolicy": turn_context.sandbox_policy.clone(),
+            "model": turn_context.client.get_model(),
+            "reasoningEffort": turn_context.client.get_reasoning_effort(),
+            "reasoningSummary": turn_context.client.get_reasoning_summary(),
+        }),
+    )
+    .await;
     // Visualization hook: this stream() call is the precise LLM request.
     // Capture the instant it begins and include the serialized `prompt` so
     // latency can be measured until the corresponding `ResponseEvent::Completed`
     // arrives while showing the raw payload that was transmitted.
-    let mut stream = turn_context.client.clone().stream(&prompt).await?;
+    let prompt_ref = prompt.as_ref();
+    let mut stream = turn_context.client.clone().stream(prompt_ref).await?;
+    sess.emit_with_state(
+        "llm_stream_started",
+        json!({
+            "subId": sub_id,
+            "promptInputCount": prompt_ref.input.len(),
+            "toolCount": prompt_ref.tools.len(),
+            "parallelToolCalls": prompt_ref.parallel_tool_calls,
+        }),
+    )
+    .await;
 
     let mut output = Vec::new();
     // Visualization hook: ToolCallRuntime orchestrates concurrent tool
@@ -2948,6 +3178,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            visualizer: SessionVisualizer::new(AgentVisualizer::from_env(), conversation_id),
         };
         (session, turn_context)
     }
@@ -3021,6 +3252,7 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             next_internal_sub_id: AtomicU64::new(0),
+            visualizer: SessionVisualizer::new(AgentVisualizer::from_env(), conversation_id),
         });
         (session, turn_context, rx_event)
     }

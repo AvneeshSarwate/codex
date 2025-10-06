@@ -17,6 +17,10 @@ impl ConversationHistory {
         self.items.clone()
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
     /// `items` is ordered from oldest to newest.
     pub(crate) fn record_items<I>(&mut self, items: I)
     where
