@@ -18,6 +18,7 @@ use crate::protocol::TurnAbortedEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use serde_json::json;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
@@ -57,6 +58,10 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
 }
 
 impl Session {
+    /// Visualization hook: every task represents a new agent phase (plan,
+    /// edit, test, review, auto-compact). Emit an event here with the new
+    /// `sub_id`, `task.kind()`, and size of the `input` vector so the UI can
+    /// show task lifetimes and understand which payload kicked off the phase.
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -64,10 +69,15 @@ impl Session {
         input: Vec<InputItem>,
         task: T,
     ) {
+        // Visualization hook: aborting older tasks maps to timeline branches
+        // getting cancelled (interrupts, plan revisions). Emit telemetry that
+        // lists each aborted task's `TaskKind` and the `TurnAbortReason` so
+        // guardrail events can explain why lanes disappeared.
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
+        let input_len = input.len();
 
         let handle = {
             let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
@@ -90,7 +100,22 @@ impl Session {
             kind: task_kind,
             task,
         };
-        self.register_new_active_task(sub_id, running_task).await;
+        // Visualization hook: track the moment a task becomes "active" by
+        // logging the `sub_id`, `task.kind`, and optional approval/tool state so
+        // the visualization can light up the corresponding lane.
+        self.register_new_active_task(sub_id.clone(), running_task)
+            .await;
+        self.emit_with_state(
+            "task_spawned",
+            json!({
+                "subId": sub_id,
+                "taskKind": format!("{:?}", task_kind),
+                "inputItems": input_len,
+                "cwd": turn_context.cwd.display().to_string(),
+                "isReviewMode": turn_context.is_review_mode,
+            }),
+        )
+        .await;
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -111,11 +136,24 @@ impl Session {
             *active = None;
         }
         drop(active);
+        // Visualization hook: TaskComplete closes the lane and carries the
+        // assistant's final message for the phase. Emit the `sub_id` and
+        // `last_agent_message` alongside completion timestamps so latency can
+        // be derived relative to the spawn event.
+        let completion_preview = last_agent_message.clone();
         let event = Event {
-            id: sub_id,
+            id: sub_id.clone(),
             msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
         };
         self.send_event(event).await;
+        self.emit_with_state(
+            "task_completed",
+            json!({
+                "subId": sub_id,
+                "lastAgentMessage": completion_preview,
+            }),
+        )
+        .await;
     }
 
     async fn register_new_active_task(&self, sub_id: String, task: RunningTask) {
@@ -147,6 +185,7 @@ impl Session {
             return;
         }
 
+        let task_kind = task.kind;
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         let session_task = task.task;
         let handle = task.handle;
@@ -154,11 +193,21 @@ impl Session {
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task.abort(session_ctx, &sub_id).await;
 
+        let reason_text = format!("{:?}", reason);
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
         };
         self.send_event(event).await;
+        self.emit_with_state(
+            "task_aborted",
+            json!({
+                "subId": sub_id,
+                "taskKind": format!("{:?}", task_kind),
+                "reason": reason_text,
+            }),
+        )
+        .await;
     }
 }
 
