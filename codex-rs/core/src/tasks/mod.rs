@@ -57,6 +57,10 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
 }
 
 impl Session {
+    /// Visualization hook: every task represents a new agent phase (plan,
+    /// edit, test, review, auto-compact). Emit an event here with the new
+    /// `sub_id`, `task.kind()`, and size of the `input` vector so the UI can
+    /// show task lifetimes and understand which payload kicked off the phase.
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
@@ -64,6 +68,10 @@ impl Session {
         input: Vec<InputItem>,
         task: T,
     ) {
+        // Visualization hook: aborting older tasks maps to timeline branches
+        // getting cancelled (interrupts, plan revisions). Emit telemetry that
+        // lists each aborted task's `TaskKind` and the `TurnAbortReason` so
+        // guardrail events can explain why lanes disappeared.
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
@@ -90,6 +98,9 @@ impl Session {
             kind: task_kind,
             task,
         };
+        // Visualization hook: track the moment a task becomes "active" by
+        // logging the `sub_id`, `task.kind`, and optional approval/tool state so
+        // the visualization can light up the corresponding lane.
         self.register_new_active_task(sub_id, running_task).await;
     }
 
@@ -111,6 +122,10 @@ impl Session {
             *active = None;
         }
         drop(active);
+        // Visualization hook: TaskComplete closes the lane and carries the
+        // assistant's final message for the phase. Emit the `sub_id` and
+        // `last_agent_message` alongside completion timestamps so latency can
+        // be derived relative to the spawn event.
         let event = Event {
             id: sub_id,
             msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),

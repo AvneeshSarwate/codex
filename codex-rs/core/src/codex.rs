@@ -152,6 +152,14 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
+        // Visualization hook: this is where AGENTS.md guidance (plus any
+        // configured overrides) is loaded into memory before the session
+        // starts. Emit a "memory bootstrap" event that captures the resolved
+        // `user_instructions` string, whether it originated from
+        // `config.user_instructions`, project docs, or defaults, and the
+        // effective `config.base_instructions`. Also include
+        // `config.project_doc_max_bytes`/`config.cwd` so the UI can explain how
+        // the instruction block was assembled.
         let user_instructions = get_user_instructions(&config).await;
 
         let config = Arc::new(config);
@@ -186,6 +194,11 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
+        // Visualization hook: the spawned submission_loop task is the core
+        // agent event loop. Emit a "session loop started" event containing the
+        // generated `conversation_id`, selected `config.model`, provider id,
+        // and sandbox/approval policies so downstream instrumentation can anchor
+        // turn/task phases to a single async task identifier.
         tokio::spawn(submission_loop(session, turn_context, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
@@ -1118,6 +1131,13 @@ impl Drop for Session {
     }
 }
 
+// The submission loop serializes user/API operations (`Op`) into the
+// single-threaded agent state machine. Instrumentation here should log the
+// incoming `sub.id`, `sub.op` discriminant, and any embedded payloads so the
+// UI can expose phase boundaries (plan → edit → test → review), task
+// lifetimes, approval wait states, and interrupts. Every high-level action
+// flows through this dispatcher before touching model state, so capturing the
+// queue depth and timestamps here provides the backbone of the visualization.
 async fn submission_loop(
     sess: Arc<Session>,
     turn_context: TurnContext,
@@ -1129,6 +1149,11 @@ async fn submission_loop(
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
+        // Visualization hook: `sub` carries a unique id for every user prompt
+        // or control message. Emit an immediate event with `sub.id`,
+        // `std::mem::discriminant(&sub.op)`, and serialized arguments (e.g.,
+        // pending tool outputs, override knobs) so the UI can open a new
+        // timeline row before model calls, tool invocations, or approvals start.
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task().await;
@@ -1232,6 +1257,11 @@ async fn submission_loop(
                     .client
                     .get_otel_event_manager()
                     .user_prompt(&items);
+                // Visualization hook: attempting to inject into the active
+                // task distinguishes "interruption" vs "new turn" flows. Log
+                // `sub.id`, the number of `items` injected, and whether the
+                // call to `sess.inject_input` succeeded so the UI can branch the
+                // timeline into "continue existing task" vs. "spawn RegularTask".
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
@@ -1334,6 +1364,14 @@ async fn submission_loop(
                     // Install the new persistent context for subsequent tasks/turns.
                     turn_context = Arc::new(fresh_turn_context);
 
+                    // Visualization hook: this spawn records the beginning of a
+                    // per-turn plan/edit/test cycle using the freshly patched
+                    // TurnContext (model overrides, sandbox changes, schema,
+                    // etc.). Emit an event carrying the derived
+                    // `turn_context.client.get_model()`,
+                    // `turn_context.tools_config`, approval/sandbox policies,
+                    // and `final_output_json_schema` so the UI can open a phase
+                    // lane that reflects the effective configuration.
                     // no current task, spawn a new one with the per-turn context
                     sess.spawn_task(Arc::clone(&turn_context), sub.id, items, RegularTask)
                         .await;
@@ -1343,13 +1381,29 @@ async fn submission_loop(
                 ReviewDecision::Abort => {
                     sess.interrupt_task().await;
                 }
-                other => sess.notify_approval(&id, other).await,
+                other => {
+                    // Visualization hook: approvals unblock sandboxed commands
+                    // or apply_patch operations. Emit "approval granted"
+                    // markers that include the approval `id`, the exact
+                    // `decision`, and the elapsed wait time since the matching
+                    // approval request so the UI can show whether the task
+                    // resumed successfully afterward.
+                    sess.notify_approval(&id, other).await
+                }
             },
             Op::PatchApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
                     sess.interrupt_task().await;
                 }
-                other => sess.notify_approval(&id, other).await,
+                other => {
+                    // Visualization hook: approvals unblock sandboxed commands
+                    // or apply_patch operations. Emit "approval granted"
+                    // markers that include the approval `id`, the exact
+                    // `decision`, and the elapsed wait time since the matching
+                    // approval request so the UI can show whether the task
+                    // resumed successfully afterward.
+                    sess.notify_approval(&id, other).await
+                }
             },
             Op::AddToHistory { text } => {
                 let id = sess.conversation_id;
@@ -1434,6 +1488,11 @@ async fn submission_loop(
                     }])
                     .await
                 {
+                    // Visualization hook: compaction runs as its own task to
+                    // recover context window headroom. Emit an event that logs
+                    // the triggering token counts, `sub.id`, and the prompt
+                    // items that will be summarized so the UI can show why
+                    // tool/model calls were paused.
                     sess.spawn_task(Arc::clone(&turn_context), sub.id, items, CompactTask)
                         .await;
                 }
@@ -1496,6 +1555,11 @@ async fn submission_loop(
                 sess.send_event(event).await;
             }
             Op::Review { review_request } => {
+                // Visualization hook: Review tasks spin up a dedicated child
+                // session with isolated history. Emit an event with the
+                // `sub.id`, `review_request` metadata (target files, diffs),
+                // and parent turn identifiers so the UI can open a "review"
+                // lane and later collapse back once `ExitedReviewMode` fires.
                 spawn_review_thread(
                     sess.clone(),
                     config.clone(),
@@ -1626,6 +1690,11 @@ pub(crate) async fn run_task(
     if input.is_empty() {
         return None;
     }
+    // Visualization hook: TaskStarted kicks off a new run loop. Emit an event
+    // carrying `sub_id`, `turn_context.client.get_model()`, reasoning knobs,
+    // and the serialized `input` so downstream latency metrics (model call
+    // duration, approval wait, tool runtime) can be derived relative to this
+    // moment.
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::TaskStarted(TaskStartedEvent {
@@ -1645,6 +1714,11 @@ pub(crate) async fn run_task(
         review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
+        // Visualization hook: recording the user input updates both the in
+        // memory history and the rollout file. Emit an event with the
+        // serialized `initial_input_for_turn` (including role + content
+        // metadata) so the UI can surface "memory updated" markers tied to
+        // AGENTS.md derived prompts.
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
             .await;
     }
@@ -1652,6 +1726,10 @@ pub(crate) async fn run_task(
     let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
+    // Visualization hook: expose this tracker so the UI can present a
+    // chronological diff timeline (edit → test) alongside tool executions and
+    // final commits. Log the tracker id plus per-file diff metadata when
+    // snapshots are requested so visual diff lanes can stay in sync.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut auto_compact_recently_attempted = false;
 
@@ -1676,6 +1754,12 @@ pub(crate) async fn run_task(
         //   conversation history on each turn. The rollout file, however, should
         //   only record the new items that originated in this turn so that it
         //   represents an append-only log without duplicates.
+        // Visualization hook: `turn_input` represents the full prompt payload
+        // that will be sent to the LLM this turn (history, pending user input,
+        // AGENTS.md instructions, plan/test diffs). Snapshot each
+        // `ResponseItem` with its role/call_id and annotate the source (session
+        // history vs. pending_input vs. injected tool output) so the UI can
+        // reconstruct the composite prompt and diff it across turns.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
             if !pending_input.is_empty() {
                 review_thread_history.extend(pending_input);
@@ -1686,6 +1770,10 @@ pub(crate) async fn run_task(
             sess.turn_input_with_history(pending_input).await
         };
 
+        // Visualization hook: `turn_input_messages` flattens assistant/user
+        // utterances so inspectors can preview the raw text that will enter the
+        // LLM. Capture these strings alongside their originating `ResponseItem`
+        // indices to power prompt previews.
         let turn_input_messages: Vec<String> = turn_input
             .iter()
             .filter_map(|item| match item {
@@ -1699,6 +1787,11 @@ pub(crate) async fn run_task(
                 })
             })
             .collect();
+        // Visualization hook: this is the tight turn loop that issues a single
+        // streaming request to the model and reacts to tool calls. Emit a
+        // "turn started" marker containing `sub_id`, the prompt hash, and
+        // `turn_input_messages` so latency/token charts can align with the raw
+        // prompt content.
         match run_turn(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -1717,6 +1810,11 @@ pub(crate) async fn run_task(
                     .client
                     .get_auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
+                // Visualization hook: compare `total_token_usage` with
+                // `limit` to drive a "context pressure" gauge. Emit the raw
+                // `TokenUsage` fields (prompt/output/total) plus the computed
+                // `limit` so guardrail events can explain why the agent pivoted
+                // or triggered compaction.
                 let total_usage_tokens = total_token_usage
                     .as_ref()
                     .map(TokenUsage::tokens_in_context_window);
@@ -1828,6 +1926,12 @@ pub(crate) async fn run_task(
                 }
 
                 if token_limit_reached {
+                    // Visualization hook: hitting the limit signals high
+                    // context pressure. Emit an event when we enter the
+                    // summarization loop that captures `total_usage_tokens`,
+                    // `limit`, and whether `auto_compact_recently_attempted`
+                    // was already true so the UI can plot compaction attempts
+                    // and their outcomes.
                     if auto_compact_recently_attempted {
                         let limit_str = limit.to_string();
                         let current_tokens = total_usage_tokens
@@ -1931,6 +2035,10 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
+    // Visualization hook: snapshot the MCP/tool catalog each turn so the UI
+    // can display which schemas/versions were available when a tool call was
+    // proposed. Log the tool id, schema hash/version, and connection metadata
+    // so provenance can be shown alongside tool errors.
     let mcp_tools = sess.services.mcp_connection_manager.list_all_tools();
     let router = Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
@@ -1942,6 +2050,11 @@ async fn run_turn(
         .get_model_family()
         .supports_parallel_tool_calls;
     let parallel_tool_calls = model_supports_parallel;
+    // Visualization hook: this prompt object is the exact LLM request payload
+    // (messages, tool specs, streaming flags, JSON schema). Capture the full
+    // `prompt.input` (with role/source annotations), `prompt.tools`
+    // definitions, `parallel_tool_calls`, and reasoning/sampling knobs so the
+    // browser timeline can render an "LLM request envelope".
     let prompt = Prompt {
         input,
         tools: router.specs(),
@@ -1951,6 +2064,10 @@ async fn run_turn(
     };
 
     let mut retries = 0;
+    // Visualization hook: record retry attempts and elapsed time so latency
+    // charts can annotate disconnects, backoff windows, and retry budgets.
+    // Emit telemetry with the `retries` count, `max_retries`, error variant,
+    // and computed `delay` for each loop iteration.
     loop {
         match try_run_turn(
             Arc::clone(&router),
@@ -1994,6 +2111,11 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
+                    // Visualization hook: forward this message (including the
+                    // formatted error text, `retries`, `max_retries`, and
+                    // `delay`) to the live timeline so we can show
+                    // guardrail/latency bars for each retry attempt alongside
+                    // cumulative wall-clock time.
                     sess.notify_stream_error(
                         &sub_id,
                         format!(
@@ -2090,6 +2212,11 @@ async fn try_run_turn(
         })
     };
 
+    // Visualization hook: persisting the turn context creates a durable audit
+    // trail of the agent's working directory, sandbox, and reasoning knobs.
+    // Emit a timeline event containing the serialized `TurnContextItem` so the
+    // UI can correlate context-window pressure against cwd, approval policy,
+    // sandbox policy, and reasoning settings over time.
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
@@ -2099,9 +2226,17 @@ async fn try_run_turn(
         summary: turn_context.client.get_reasoning_summary(),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
+    // Visualization hook: this stream() call is the precise LLM request.
+    // Capture the instant it begins and include the serialized `prompt` so
+    // latency can be measured until the corresponding `ResponseEvent::Completed`
+    // arrives while showing the raw payload that was transmitted.
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+    // Visualization hook: ToolCallRuntime orchestrates concurrent tool
+    // execution. Track its lifecycle by logging tool names, `call_id`s,
+    // argument payloads, stdout/stderr streams, approval waits, and retry
+    // metadata so the UI can display per-tool statuses.
     let mut tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
@@ -2139,6 +2274,11 @@ async fn try_run_turn(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                // Visualization hook: tool call proposals surface here. Emit an
+                // event with `call.tool_name`, `call.call_id`, argument JSON,
+                // and the assigned `index` so the UI can draw per-call
+                // lifecycles (proposed → running → completed/failed) and show
+                // argument previews for debugging.
                 match ToolRouter::build_tool_call(sess.as_ref(), item.clone()) {
                     Ok(Some(call)) => {
                         let payload_preview = call.payload.log_payload().into_owned();
@@ -2212,12 +2352,20 @@ async fn try_run_turn(
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until
                 // token usage is available to avoid duplicate TokenCount events.
+                // Visualization hook: stash this snapshot so the UI can render
+                // a rate-limit chart alongside token consumption per turn. Log
+                // the full `RateLimitSnapshot` (limit, remaining, reset) to
+                // drive accurate quota visualizations.
                 sess.update_rate_limits(sub_id, snapshot).await;
             }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
             } => {
+                // Visualization hook: Completed marks the end of the model
+                // stream. Emit an event with `token_usage`, elapsed stream
+                // duration, and accumulated diff summaries to drive usage and
+                // throughput charts.
                 sess.update_token_usage_info(sub_id, turn_context.as_ref(), token_usage.as_ref())
                     .await;
 
@@ -2247,6 +2395,10 @@ async fn try_run_turn(
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
                 if !turn_context.is_review_mode {
+                    // Visualization hook: forward streaming assistant text so
+                    // the UI can render live deltas synchronized with tool
+                    // activity and reasoning traces. Include the raw `delta`
+                    // text and offset indices for accurate playback.
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
@@ -2257,6 +2409,9 @@ async fn try_run_turn(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
+                // Visualization hook: reasoning deltas power the "thought
+                // bubble" lane. Log the structured `delta` segments and their
+                // timestamps relative to tool calls to highlight cause/effect.
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
@@ -2264,6 +2419,10 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
+                // Visualization hook: treat section breaks as structural cues
+                // for the reasoning timeline (e.g., plan → edit transitions).
+                // Emit the zero-argument event with a precise timestamp for
+                // segmenting the reasoning lane.
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
@@ -2272,6 +2431,10 @@ async fn try_run_turn(
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if sess.show_raw_agent_reasoning() {
+                    // Visualization hook: raw reasoning is noisy but valuable
+                    // for power users. Surface it in a collapsible lane with
+                    // cache-hit/context-window annotations by logging the raw
+                    // `delta` chunks and any available metadata.
                     let event = Event {
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
@@ -2293,6 +2456,11 @@ async fn handle_non_tool_response_item(
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
 
+    // Visualization hook: non-tool items include plan/edit/test narration,
+    // approvals, and final assistant responses. Emit annotations that carry the
+    // raw `item` payload (role, text, call ids) so the UI can label timeline
+    // rows (e.g., "plan drafted", "final answer", "approval requested") and
+    // correlate them with reasoning deltas.
     match &item {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
