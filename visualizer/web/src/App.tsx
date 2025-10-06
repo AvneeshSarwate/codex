@@ -10,6 +10,33 @@ type VisualizerEvent = {
   state?: unknown;
 };
 
+type ProtocolEventMessage = {
+  type?: string;
+  delta?: unknown;
+  text?: unknown;
+};
+
+type ProtocolEventPayload = {
+  id?: string;
+  msg?: ProtocolEventMessage;
+};
+
+type ProtocolEventAction = {
+  event?: ProtocolEventPayload;
+};
+
+type AggregatedDelta = {
+  subtype: string;
+  combinedText: string;
+  events: VisualizerEvent[];
+};
+
+type DisplayEvent = {
+  event: VisualizerEvent;
+  subtype: string | null;
+  aggregated?: AggregatedDelta;
+};
+
 const WEBSOCKET_URL = import.meta.env.VITE_VISUALIZER_WS ?? "ws://localhost:4100/?role=viewer";
 
 function formatTimestamp(timestampMs: number) {
@@ -25,27 +52,48 @@ function stringify(value: unknown) {
   }
 }
 
-function protocolEventType(action: unknown): string | null {
+function extractProtocolEvent(action: unknown): ProtocolEventPayload | null {
   if (!action || typeof action !== "object") {
     return null;
   }
 
-  const actionRecord = action as { [key: string]: unknown };
-  const eventValue = actionRecord.event;
-  if (!eventValue || typeof eventValue !== "object") {
+  const event = (action as ProtocolEventAction).event;
+  if (!event || typeof event !== "object") {
     return null;
   }
 
-  const eventRecord = eventValue as { [key: string]: unknown };
-  const msg = eventRecord.msg;
+  return event as ProtocolEventPayload;
+}
+
+function protocolEventType(action: unknown): string | null {
+  const event = extractProtocolEvent(action);
+  const msg = event?.msg;
   if (!msg || typeof msg !== "object") {
     return null;
   }
 
-  const msgRecord = msg as { [key: string]: unknown };
-  const eventType = msgRecord.type;
+  const eventType = (msg as ProtocolEventMessage).type;
   return typeof eventType === "string" ? eventType : null;
 }
+
+function protocolEventId(action: unknown): string | null {
+  const event = extractProtocolEvent(action);
+  const id = event?.id;
+  return typeof id === "string" ? id : null;
+}
+
+function protocolEventDelta(action: unknown): string | null {
+  const event = extractProtocolEvent(action);
+  const msg = event?.msg;
+  if (!msg || typeof msg !== "object") {
+    return null;
+  }
+
+  const delta = (msg as ProtocolEventMessage).delta;
+  return typeof delta === "string" ? delta : null;
+}
+
+const DELTA_SUBTYPES = new Set(["agent_message_delta", "agent_reasoning_delta"]);
 
 export default function App() {
   const [events, setEvents] = useState<VisualizerEvent[]>([]);
@@ -99,10 +147,76 @@ export default function App() {
     };
   }, []);
 
-  const orderedEvents = useMemo(
-    () => [...events].sort((a, b) => a.sequence - b.sequence),
-    [events]
-  );
+  const displayEvents = useMemo(() => {
+    const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
+    const result: DisplayEvent[] = [];
+    type PendingAggregate = {
+      key: string;
+      subtype: string;
+      events: VisualizerEvent[];
+      combinedText: string;
+    };
+    let pending: PendingAggregate | null = null;
+
+    const flushPending = () => {
+      if (!pending) {
+        return;
+      }
+      const aggregatedEvents = pending.events;
+      const first = aggregatedEvents[0];
+      const last = aggregatedEvents[aggregatedEvents.length - 1];
+      const aggregatedEvent: VisualizerEvent = {
+        ...first,
+        state: last.state,
+      };
+      result.push({
+        event: aggregatedEvent,
+        subtype: pending.subtype,
+        aggregated: {
+          subtype: pending.subtype,
+          combinedText: pending.combinedText,
+          events: aggregatedEvents,
+        },
+      });
+      pending = null;
+    };
+
+    for (const event of sorted) {
+      const subtype = event.actionType === "protocol_event" ? protocolEventType(event.action) : null;
+
+      if (event.actionType === "protocol_event" && subtype && DELTA_SUBTYPES.has(subtype)) {
+        const id = protocolEventId(event.action) ?? "__no_id__";
+        const key = `${id}::${subtype}`;
+        const delta = protocolEventDelta(event.action);
+
+        if (typeof delta !== "string") {
+          flushPending();
+          result.push({ event, subtype });
+          continue;
+        }
+
+        if (pending && pending.key === key) {
+          pending.events.push(event);
+          pending.combinedText += delta;
+        } else {
+          flushPending();
+          pending = {
+            key,
+            subtype,
+            events: [event],
+            combinedText: delta,
+          };
+        }
+        continue;
+      }
+
+      flushPending();
+      result.push({ event, subtype });
+    }
+
+    flushPending();
+    return result;
+  }, [events]);
 
   return (
     <div className="app">
@@ -111,7 +225,7 @@ export default function App() {
         <div className="status">WebSocket status: {connectionStatus}</div>
       </header>
       <main className="timeline">
-        {orderedEvents.length === 0 ? (
+        {displayEvents.length === 0 ? (
           <div className="empty-state">
             <h2>No events yet</h2>
             <p>
@@ -120,11 +234,30 @@ export default function App() {
             </p>
           </div>
         ) : (
-          orderedEvents.map((event) => {
+          displayEvents.map((display) => {
+            const { event, subtype, aggregated } = display;
             const color = colorForAction(event.actionType);
-            const inferredType = event.actionType === "protocol_event" ? protocolEventType(event.action) : null;
-            const title = inferredType ? `${event.actionType} • ${inferredType}` : event.actionType;
+            const subtypeColor = subtype ? colorForAction(subtype) : null;
+            const badgeLabel = subtype
+              ? `${subtype}${aggregated && aggregated.events.length > 1 ? ` × ${aggregated.events.length}` : ""}`
+              : null;
+            const titleText = badgeLabel ? `${event.actionType} • ${badgeLabel}` : event.actionType;
             const accentStyle = { "--accent-color": color } as CSSProperties;
+            const badgeStyle = subtypeColor
+              ? ({ backgroundColor: subtypeColor } as CSSProperties)
+              : undefined;
+            const actionPayload = aggregated
+              ? {
+                  aggregated: true,
+                  subtype: aggregated.subtype,
+                  combinedText: aggregated.combinedText,
+                  segments: aggregated.events.map((segment) => ({
+                    sequence: segment.sequence,
+                    timestampMs: segment.timestampMs,
+                    action: segment.action,
+                  })),
+                }
+              : event.action;
 
             return (
               <details
@@ -134,7 +267,17 @@ export default function App() {
               >
                 <summary className="event-summary">
                   <div className="event-summary-main">
-                    <span className="event-summary-title">{title}</span>
+                    <span className="event-summary-title">
+                      <span>{event.actionType}</span>
+                      {badgeLabel ? (
+                        <>
+                          <span className="event-summary-separator">•</span>
+                          <span className="event-subtype-badge" style={badgeStyle}>
+                            {badgeLabel}
+                          </span>
+                        </>
+                      ) : null}
+                    </span>
                     <span className="event-summary-sequence">#{event.sequence}</span>
                   </div>
                   <div className="event-summary-meta event-meta">
@@ -147,12 +290,18 @@ export default function App() {
                     className="event-action"
                     style={{ borderLeftColor: color, background: actionBackground }}
                   >
-                    <h2>{title}</h2>
+                    <h2>{titleText}</h2>
                     <div className="event-meta">
                       <span>{formatTimestamp(event.timestampMs)}</span>
                       {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
                     </div>
-                    <pre className="event-json">{stringify(event.action)}</pre>
+                    {aggregated ? (
+                      <div className="event-delta-aggregate">
+                        <h3>Aggregated delta ({aggregated.events.length} segments)</h3>
+                        <pre className="event-delta-text">{aggregated.combinedText}</pre>
+                      </div>
+                    ) : null}
+                    <pre className="event-json">{stringify(actionPayload)}</pre>
                   </section>
                   <section className="event-state" style={{ background: stateBackground }}>
                     <h2>State after action</h2>
