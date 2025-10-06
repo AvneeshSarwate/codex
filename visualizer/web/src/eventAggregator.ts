@@ -9,6 +9,23 @@ import {
 
 const DELTA_SUBTYPES = new Set(["agent_message_delta", "agent_reasoning_delta"]);
 
+type PendingAggregate = {
+  key: string;
+  subtype: string;
+  firstEvent: VisualizerEvent;
+  combinedText: string;
+  events: VisualizerEvent[];
+  displayIndex: number;
+};
+
+export type DisplayAggregatorState = {
+  pending: PendingAggregate | null;
+};
+
+export function createAggregatorState(): DisplayAggregatorState {
+  return { pending: null };
+}
+
 function extractProtocolEvent(action: unknown): ProtocolEventPayload | null {
   if (!action || typeof action !== "object") {
     return null;
@@ -50,76 +67,104 @@ function protocolEventDelta(action: unknown): string | null {
   return typeof delta === "string" ? delta : null;
 }
 
-export function aggregateDisplayEvents(events: VisualizerEvent[]): DisplayEvent[] {
-  const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
-  const result: DisplayEvent[] = [];
-
-  type PendingAggregate = {
-    key: string;
-    subtype: string;
-    events: VisualizerEvent[];
-    combinedText: string;
-  };
-
-  let pending: PendingAggregate | null = null;
-
-  const flushPending = () => {
-    if (!pending) {
-      return;
-    }
-    const aggregatedEvents = pending.events;
-    const first = aggregatedEvents[0];
-    const last = aggregatedEvents[aggregatedEvents.length - 1];
-    const aggregatedEvent: VisualizerEvent = {
-      ...first,
+function writeAggregateEntry(target: DisplayEvent[], pending: PendingAggregate): DisplayEvent {
+  const last = pending.events[pending.events.length - 1];
+  const entry: DisplayEvent = {
+    event: {
+      ...pending.firstEvent,
       state: last.state,
-    };
-    const aggregated: AggregatedDelta = {
+    },
+    subtype: pending.subtype,
+    aggregated: {
       subtype: pending.subtype,
       combinedText: pending.combinedText,
-      events: aggregatedEvents,
-    };
-    result.push({
-      event: aggregatedEvent,
-      subtype: pending.subtype,
-      aggregated,
-    });
-    pending = null;
+      events: pending.events.slice(),
+    } satisfies AggregatedDelta,
   };
+  target[pending.displayIndex] = entry;
+  return entry;
+}
 
-  for (const event of sorted) {
-    const subtype = event.actionType === "protocol_event" ? protocolEventType(event.action) : null;
+function pushSimpleEvent(
+  target: DisplayEvent[],
+  event: VisualizerEvent,
+  subtype: string | null
+): DisplayEvent {
+  const entry: DisplayEvent = { event, subtype };
+  target.push(entry);
+  return entry;
+}
 
-    if (event.actionType === "protocol_event" && subtype && DELTA_SUBTYPES.has(subtype)) {
-      const id = protocolEventId(event.action) ?? "__no_id__";
-      const key = `${id}::${subtype}`;
-      const delta = protocolEventDelta(event.action);
+function processProtocolDelta(
+  target: DisplayEvent[],
+  state: DisplayAggregatorState,
+  event: VisualizerEvent,
+  subtype: string,
+  delta: string
+): DisplayEvent {
+  const id = protocolEventId(event.action) ?? "__no_id__";
+  const key = `${id}::${subtype}`;
 
-      if (typeof delta !== "string") {
-        flushPending();
-        result.push({ event, subtype });
-        continue;
-      }
-
-      if (pending && pending.key === key) {
-        pending.events.push(event);
-        pending.combinedText += delta;
-      } else {
-        flushPending();
-        pending = {
-          key,
-          subtype,
-          events: [event],
-          combinedText: delta,
-        };
-      }
-      continue;
-    }
-
-    flushPending();
-    result.push({ event, subtype });
+  if (state.pending && state.pending.key === key) {
+    state.pending.events.push(event);
+    state.pending.combinedText += delta;
+    return writeAggregateEntry(target, state.pending);
   }
 
-  flushPending();
-  return result;
+  state.pending = {
+    key,
+    subtype,
+    firstEvent: event,
+    combinedText: delta,
+    events: [event],
+    displayIndex: target.length,
+  } satisfies PendingAggregate;
+  target.push({ event, subtype: null });
+  return writeAggregateEntry(target, state.pending);
+}
+
+function processEvent(
+  target: DisplayEvent[],
+  state: DisplayAggregatorState,
+  event: VisualizerEvent
+): DisplayEvent {
+  const subtype = event.actionType === "protocol_event" ? protocolEventType(event.action) : null;
+
+  if (event.actionType === "protocol_event" && subtype && DELTA_SUBTYPES.has(subtype)) {
+    const delta = protocolEventDelta(event.action);
+    if (typeof delta === "string") {
+      return processProtocolDelta(target, state, event, subtype, delta);
+    }
+  }
+
+  state.pending = null;
+  return pushSimpleEvent(target, event, subtype);
+}
+
+export function rebuildDisplayEvents(
+  events: VisualizerEvent[],
+  target: DisplayEvent[],
+  state: DisplayAggregatorState
+) {
+  target.splice(0, target.length);
+  state.pending = null;
+  const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
+  for (const event of sorted) {
+    processEvent(target, state, event);
+  }
+}
+
+export function appendDisplayEvent(
+  event: VisualizerEvent,
+  target: DisplayEvent[],
+  state: DisplayAggregatorState
+): DisplayEvent {
+  return processEvent(target, state, event);
+}
+
+export function aggregateDisplayEvents(events: VisualizerEvent[]): DisplayEvent[] {
+  const state = createAggregatorState();
+  const displayEvents: DisplayEvent[] = [];
+  rebuildDisplayEvents(events, displayEvents, state);
+  return displayEvents;
 }

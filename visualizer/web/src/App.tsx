@@ -1,3 +1,4 @@
+import type { Snapshot } from "valtio";
 import { CSSProperties } from "react";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
 import { useVisualizerData } from "./visualizerClient";
@@ -16,7 +17,7 @@ function stringify(value: unknown) {
   }
 }
 
-function renderDisplayEvent(display: DisplayEvent) {
+function renderDisplayEvent(display: Snapshot<DisplayEvent>) {
   const { event, subtype, aggregated } = display;
   const color = colorForAction(event.actionType);
   const subtypeColor = subtype ? colorForAction(subtype) : null;

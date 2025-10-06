@@ -1,65 +1,46 @@
-import { useEffect, useState } from "react";
-import { aggregateDisplayEvents } from "./eventAggregator";
+import { useEffect } from "react";
 import {
-  ConnectionStatus,
-  VisualizerSocketMessage,
-  VisualizerState,
-} from "./visualizerTypes";
+  getVisualizerStore,
+  onDisplayEvent,
+  pushEvent,
+  replaceEvents,
+  setConnectionStatus,
+  subscribeToVisualizerStore,
+  useVisualizerSnapshot,
+} from "./visualizerStore";
+import { ConnectionStatus, VisualizerSocketMessage } from "./visualizerTypes";
 
 const WEBSOCKET_URL = import.meta.env.VITE_VISUALIZER_WS ?? "ws://localhost:4100/?role=viewer";
-const MAX_EVENTS = 50000;
 const RECONNECT_DELAY_MS = 1000;
 
-type StateListener = (state: VisualizerState) => void;
+type ConnectionToken = symbol;
 
-class VisualizerClient {
+class VisualizerConnection {
   private readonly url: string;
   private socket: WebSocket | null = null;
   private reconnectTimer: number | null = null;
   private shouldReconnect = false;
-  private listeners = new Set<StateListener>();
-  private state: VisualizerState = {
-    connectionStatus: "idle",
-    events: [],
-    displayEvents: [],
-  };
+  private activeTokens = new Set<ConnectionToken>();
 
   constructor(url: string) {
     this.url = url;
   }
 
-  getState(): VisualizerState {
-    return this.state;
-  }
-
-  subscribe(listener: StateListener): () => void {
-    this.listeners.add(listener);
-
+  acquire(): ConnectionToken {
+    const token: ConnectionToken = Symbol("visualizer-connection");
+    this.activeTokens.add(token);
     if (!this.shouldReconnect) {
       this.shouldReconnect = true;
       this.connect();
     }
-
-    listener(this.state);
-
-    return () => {
-      this.listeners.delete(listener);
-      if (this.listeners.size === 0) {
-        this.shutdown();
-      }
-    };
+    return token;
   }
 
-  private setState(updater: (prev: VisualizerState) => VisualizerState) {
-    const next = updater(this.state);
-    this.state = next;
-    for (const listener of this.listeners) {
-      listener(next);
+  release(token: ConnectionToken) {
+    this.activeTokens.delete(token);
+    if (this.activeTokens.size === 0) {
+      this.shutdown();
     }
-  }
-
-  private updateStatus(status: ConnectionStatus) {
-    this.setState((prev) => ({ ...prev, connectionStatus: status }));
   }
 
   private connect() {
@@ -96,28 +77,12 @@ class VisualizerClient {
       }
 
       if (message.type === "backlog") {
-        this.setState((prev) => {
-          const events = message.events.slice(-MAX_EVENTS);
-          const displayEvents = aggregateDisplayEvents(events);
-          return {
-            connectionStatus: prev.connectionStatus,
-            events,
-            displayEvents,
-          };
-        });
+        replaceEvents(message.events);
         return;
       }
 
       if (message.type === "event") {
-        this.setState((prev) => {
-          const events = [...prev.events, message.event].slice(-MAX_EVENTS);
-          const displayEvents = aggregateDisplayEvents(events);
-          return {
-            connectionStatus: prev.connectionStatus,
-            events,
-            displayEvents,
-          };
-        });
+        pushEvent(message.event);
         return;
       }
 
@@ -178,14 +143,29 @@ class VisualizerClient {
     }
     this.updateStatus("idle");
   }
+
+  private updateStatus(status: ConnectionStatus) {
+    setConnectionStatus(status);
+  }
 }
 
-const client = new VisualizerClient(WEBSOCKET_URL);
+const connection = new VisualizerConnection(WEBSOCKET_URL);
 
-export function useVisualizerData(): VisualizerState {
-  const [state, setState] = useState(client.getState());
-
-  useEffect(() => client.subscribe(setState), []);
-
-  return state;
+export function ensureVisualizerConnection(): () => void {
+  const token = connection.acquire();
+  return () => connection.release(token);
 }
+
+export function useVisualizerData() {
+  useEffect(ensureVisualizerConnection, []);
+  return useVisualizerSnapshot();
+}
+
+export function getVisualizerState() {
+  return getVisualizerStore();
+}
+
+export const subscribeToVisualizer = subscribeToVisualizerStore;
+export const watchDisplayEvents = onDisplayEvent;
+export const useVisualizerSnapshotState = useVisualizerSnapshot;
+export { VISUALIZER_MAX_EVENTS } from "./visualizerStore";
