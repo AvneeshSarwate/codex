@@ -97,6 +97,10 @@ impl TurnState {
             ret
         }
     }
+
+    pub(crate) fn pending_counts(&self) -> (usize, usize) {
+        (self.pending_approvals.len(), self.pending_input.len())
+    }
 }
 
 impl ActiveTurn {

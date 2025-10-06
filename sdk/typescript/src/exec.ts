@@ -30,6 +30,11 @@ export class CodexExec {
   }
 
   async *run(args: CodexExecArgs): AsyncGenerator<string> {
+    // Agent instrumentation hook: capture the raw invocation surface that
+    // ultimately determines model/agent configuration for the turn. Emit a
+    // "command prepared" event containing `commandArgs`, the original `args`
+    // payload, and any defaults that were injected so the visualization can
+    // show model/sandbox selections before the process launches.
     const commandArgs: string[] = ["exec", "--experimental-json"];
 
     if (args.model) {
@@ -66,6 +71,10 @@ export class CodexExec {
       env.CODEX_API_KEY = args.apiKey;
     }
 
+    // Agent instrumentation hook: this spawn() boundary represents the start
+    // of a Codex sub-agent lifecycle. Emit `this.executablePath`,
+    // `commandArgs`, and the resolved `env` so the timeline can line up CLI
+    // launches with downstream tool call / model streaming events.
     const child = spawn(this.executablePath, commandArgs, {
       env,
     });
@@ -77,6 +86,10 @@ export class CodexExec {
       child.kill();
       throw new Error("Child process has no stdin");
     }
+    // Agent instrumentation hook: log the exact JSON payload string (`args.input`)
+    // and any derived sampling parameters before control transfers to the Rust
+    // backend. Emit a "prompt dispatched" event that references the thread id
+    // and model so the UI can correlate CLI calls with backend turns.
     child.stdin.write(args.input);
     child.stdin.end();
 
@@ -99,6 +112,10 @@ export class CodexExec {
 
     try {
       for await (const line of rl) {
+        // Agent instrumentation hook: every JSONL line is a discrete agent
+        // state transition (`thread.*`, `turn.*`, `item.*`). Forward each `line`
+        // to the visualization layer verbatim (and optionally parse it) so the
+        // browser can render a live timeline without re-reading stdout later.
         // `line` is a string (Node sets default encoding to utf8 for readline)
         yield line as string;
       }
