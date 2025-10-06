@@ -14,6 +14,8 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use tracing::error;
+use url::Url;
+use url::form_urlencoded;
 
 #[derive(Clone)]
 pub(crate) struct AgentVisualizer {
@@ -40,6 +42,18 @@ pub(crate) struct VisualizerEvent {
     pub(crate) state: Option<Value>,
 }
 
+fn ensure_producer_role(raw_url: &str) -> Result<String, url::ParseError> {
+    let mut parsed = Url::parse(raw_url)?;
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in parsed.query_pairs().filter(|(key, _)| key != "role") {
+        serializer.append_pair(&key, &value);
+    }
+    serializer.append_pair("role", "producer");
+    let query = serializer.finish();
+    parsed.set_query(Some(&query));
+    Ok(parsed.into())
+}
+
 impl AgentVisualizer {
     pub(crate) fn from_env() -> Self {
         let url = std::env::var("CODEX_VISUALIZER_WS").ok();
@@ -48,10 +62,20 @@ impl AgentVisualizer {
 
     pub(crate) fn new(url: Option<String>) -> Self {
         if let Some(url) = url {
+            let connect_url = match ensure_producer_role(&url) {
+                Ok(prepared) => prepared,
+                Err(err) => {
+                    error!("failed to prepare visualizer websocket url: {err:?}");
+                    url
+                }
+            };
             let (tx, mut rx) = mpsc::channel(256);
             tokio::spawn(async move {
                 let mut pending: Option<VisualizerEvent> = None;
-                loop {
+                let mut stream: Option<_> = None;
+                let retry_delay = Duration::from_secs(1);
+
+                'outer: loop {
                     if pending.is_none() {
                         match rx.recv().await {
                             Some(event) => pending = Some(event),
@@ -63,50 +87,77 @@ impl AgentVisualizer {
                         continue;
                     };
 
-                    match connect_async(&url).await {
-                        Ok((mut stream, _)) => {
-                            let serialized = match serde_json::to_string(&event) {
-                                Ok(payload) => payload,
-                                Err(err) => {
-                                    error!("failed to serialize visualizer event: {err:?}");
-                                    continue;
-                                }
-                            };
-
-                            match stream.send(Message::Text(serialized)).await {
-                                Ok(()) => {
-                                    pending = None;
-                                    while let Ok(next) = rx.try_recv() {
-                                        let serialized = match serde_json::to_string(&next) {
-                                            Ok(payload) => payload,
-                                            Err(err) => {
-                                                error!(
-                                                    "failed to serialize visualizer event: {err:?}"
-                                                );
-                                                continue;
-                                            }
-                                        };
-
-                                        if let Err(err) =
-                                            stream.send(Message::Text(serialized)).await
-                                        {
-                                            error!("failed to send visualizer event: {err:?}");
-                                            pending = Some(next);
-                                            break;
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    error!("failed to send visualizer event: {err:?}");
-                                    pending = Some(event);
-                                    tokio::time::sleep(Duration::from_secs(1)).await;
-                                }
+                    if stream.is_none() {
+                        match connect_async(&connect_url).await {
+                            Ok((ws, _)) => stream = Some(ws),
+                            Err(err) => {
+                                error!("failed to connect to visualizer websocket: {err:?}");
+                                pending = Some(event);
+                                tokio::time::sleep(retry_delay).await;
+                                continue;
                             }
                         }
+                    }
+
+                    let serialized = match serde_json::to_string(&event) {
+                        Ok(payload) => payload,
                         Err(err) => {
-                            error!("failed to connect to visualizer websocket: {err:?}");
+                            error!("failed to serialize visualizer event: {err:?}");
+                            continue;
+                        }
+                    };
+
+                    let send_result = match stream.as_mut() {
+                        Some(ws) => ws.send(Message::Text(serialized)).await,
+                        None => {
+                            error!("visualizer websocket stream missing before send");
                             pending = Some(event);
-                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            tokio::time::sleep(retry_delay).await;
+                            continue;
+                        }
+                    };
+
+                    match send_result {
+                        Ok(()) => loop {
+                            match rx.try_recv() {
+                                Ok(next) => {
+                                    let serialized = match serde_json::to_string(&next) {
+                                        Ok(payload) => payload,
+                                        Err(err) => {
+                                            error!("failed to serialize visualizer event: {err:?}");
+                                            continue;
+                                        }
+                                    };
+
+                                    let backlog_send = match stream.as_mut() {
+                                        Some(ws) => ws.send(Message::Text(serialized)).await,
+                                        None => {
+                                            error!(
+                                                "visualizer websocket stream missing before backlog send"
+                                            );
+                                            pending = Some(next);
+                                            tokio::time::sleep(retry_delay).await;
+                                            continue 'outer;
+                                        }
+                                    };
+
+                                    if let Err(err) = backlog_send {
+                                        error!("failed to send visualizer event: {err:?}");
+                                        pending = Some(next);
+                                        stream = None;
+                                        tokio::time::sleep(retry_delay).await;
+                                        continue 'outer;
+                                    }
+                                }
+                                Err(mpsc::error::TryRecvError::Empty) => continue 'outer,
+                                Err(mpsc::error::TryRecvError::Disconnected) => break 'outer,
+                            }
+                        },
+                        Err(err) => {
+                            error!("failed to send visualizer event: {err:?}");
+                            pending = Some(event);
+                            stream = None;
+                            tokio::time::sleep(retry_delay).await;
                         }
                     }
                 }

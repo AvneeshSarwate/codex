@@ -193,7 +193,7 @@ impl Session {
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task.abort(session_ctx, &sub_id).await;
 
-        let reason_text = format!("{:?}", reason);
+        let reason_text = format!("{reason:?}");
         let event = Event {
             id: sub_id.clone(),
             msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
