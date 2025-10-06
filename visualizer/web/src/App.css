@@ -43,18 +43,86 @@ body {
   gap: 1rem;
 }
 
-.event-row {
+.event-item {
+  border-left: 8px solid var(--accent-color, #1f2937);
+  border-radius: 0.75rem;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+  transition: box-shadow 0.2s ease;
+}
+
+.event-item[open] {
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+}
+
+.event-summary {
+  position: relative;
+  list-style: none;
+  padding: 1rem 1.25rem 1rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.event-summary::-webkit-details-marker {
+  display: none;
+}
+
+.event-summary::before {
+  content: "";
+  position: absolute;
+  left: 1.25rem;
+  top: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 2px solid var(--accent-color, #1f2937);
+  border-bottom: 2px solid var(--accent-color, #1f2937);
+  transform: translateY(-50%) rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.event-item[open] .event-summary::before {
+  transform: translateY(-50%) rotate(225deg);
+}
+
+.event-summary-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.event-summary-title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.event-summary-sequence {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1f2937;
+  background: #e2e8f0;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+}
+
+.event-summary-meta {
+  font-size: 0.8125rem;
+  color: #475569;
+}
+
+.event-content {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1rem;
-  padding: 1rem;
-  border-radius: 0.75rem;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-  background: #ffffff;
+  padding: 0 1.25rem 1.25rem;
 }
 
 .event-action {
-  border-left: 4px solid #1f2937;
+  border-left: 8px solid var(--accent-color, #1f2937);
   padding-left: 1rem;
 }
 
@@ -71,6 +139,10 @@ body {
   font-size: 0.8125rem;
   color: #475569;
   margin-bottom: 0.5rem;
+}
+
+.event-summary-meta {
+  margin-bottom: 0;
 }
 
 .event-meta span {

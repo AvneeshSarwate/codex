@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useState } from "react";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
 
 type VisualizerEvent = {
@@ -23,6 +23,28 @@ function stringify(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function protocolEventType(action: unknown): string | null {
+  if (!action || typeof action !== "object") {
+    return null;
+  }
+
+  const actionRecord = action as { [key: string]: unknown };
+  const eventValue = actionRecord.event;
+  if (!eventValue || typeof eventValue !== "object") {
+    return null;
+  }
+
+  const eventRecord = eventValue as { [key: string]: unknown };
+  const msg = eventRecord.msg;
+  if (!msg || typeof msg !== "object") {
+    return null;
+  }
+
+  const msgRecord = msg as { [key: string]: unknown };
+  const eventType = msgRecord.type;
+  return typeof eventType === "string" ? eventType : null;
 }
 
 export default function App() {
@@ -100,25 +122,44 @@ export default function App() {
         ) : (
           orderedEvents.map((event) => {
             const color = colorForAction(event.actionType);
+            const inferredType = event.actionType === "protocol_event" ? protocolEventType(event.action) : null;
+            const title = inferredType ? `${event.actionType} • ${inferredType}` : event.actionType;
+            const accentStyle = { "--accent-color": color } as CSSProperties;
+
             return (
-              <div className="event-row" key={`${event.sequence}-${event.timestampMs}`}>
-                <section
-                  className="event-action"
-                  style={{ borderLeftColor: color, background: actionBackground }}
-                >
-                  <h2>{event.actionType}</h2>
-                  <div className="event-meta">
-                    <span>#{event.sequence}</span>
+              <details
+                className="event-item"
+                key={`${event.sequence}-${event.timestampMs}`}
+                style={accentStyle}
+              >
+                <summary className="event-summary">
+                  <div className="event-summary-main">
+                    <span className="event-summary-title">{title}</span>
+                    <span className="event-summary-sequence">#{event.sequence}</span>
+                  </div>
+                  <div className="event-summary-meta event-meta">
                     <span>{formatTimestamp(event.timestampMs)}</span>
                     {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
                   </div>
-                  <pre className="event-json">{stringify(event.action)}</pre>
-                </section>
-                <section className="event-state" style={{ background: stateBackground }}>
-                  <h2>State after action</h2>
-                  <pre className="state-json">{stringify(event.state ?? {})}</pre>
-                </section>
-              </div>
+                </summary>
+                <div className="event-content">
+                  <section
+                    className="event-action"
+                    style={{ borderLeftColor: color, background: actionBackground }}
+                  >
+                    <h2>{title}</h2>
+                    <div className="event-meta">
+                      <span>{formatTimestamp(event.timestampMs)}</span>
+                      {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
+                    </div>
+                    <pre className="event-json">{stringify(event.action)}</pre>
+                  </section>
+                  <section className="event-state" style={{ background: stateBackground }}>
+                    <h2>State after action</h2>
+                    <pre className="state-json">{stringify(event.state ?? {})}</pre>
+                  </section>
+                </div>
+              </details>
             );
           })
         )}
