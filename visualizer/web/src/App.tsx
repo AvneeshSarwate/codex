@@ -5,6 +5,7 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
 import { useVisualizerData } from "./visualizerClient";
 import { DisplayEvent } from "./visualizerTypes";
+import { getDisplayIndexForSequence } from "./visualizerStore";
 import { VisualizerSketch } from "./VisualizerSketch";
 import { ReplayControls } from "./replay/ReplayControls";
 import { CircleSelection } from "./visualizerSketch/konvaManager";
@@ -14,7 +15,7 @@ function formatTimestamp(timestampMs: number) {
   return `${date.toLocaleTimeString()} • ${date.toLocaleDateString()}`;
 }
 
-function stringify(value: unknown) {
+function formatJson(value: unknown) {
   try {
     return JSON.stringify(value, null, 2);
   } catch {
@@ -35,26 +36,11 @@ export default function App() {
   type SelectedEventState = {
     sourceSequence: number;
     timelineSequence: number;
-    sequences: number[];
   };
 
   const [selectedEvent, setSelectedEvent] = useState<SelectedEventState | null>(null);
 
   const followOutput = replay.mode === "live" ? "auto" : false;
-
-  const sequenceToDisplayIndex = useMemo(() => {
-    const map = new Map<number, number>();
-    displayEvents.forEach((display, index) => {
-      map.set(display.event.sequence, index);
-      const aggregated = display.aggregated?.events;
-      if (aggregated) {
-        aggregated.forEach((segment) => {
-          map.set(segment.sequence, index);
-        });
-      }
-    });
-    return map;
-  }, [displayEvents]);
 
   const activeReplayIndex = useMemo(() => {
     if (replay.mode !== "replay") {
@@ -70,9 +56,9 @@ export default function App() {
     if (!targetEvent) {
       return displayEvents.length - 1;
     }
-    const mapped = sequenceToDisplayIndex.get(targetEvent.sequence);
+    const mapped = getDisplayIndexForSequence(targetEvent.sequence);
     return mapped ?? displayEvents.length - 1;
-  }, [displayEvents.length, replay.buffer, replay.cursor, replay.mode, sequenceToDisplayIndex]);
+  }, [displayEvents.length, replay.buffer, replay.cursor, replay.mode]);
 
   useEffect(() => {
     const previousMode = previousModeRef.current;
@@ -134,41 +120,36 @@ export default function App() {
     if (!selectedEvent) {
       return;
     }
-    const hasTimeline = sequenceToDisplayIndex.has(selectedEvent.timelineSequence);
-    const hasSource = sequenceToDisplayIndex.has(selectedEvent.sourceSequence);
+    const hasTimeline = getDisplayIndexForSequence(selectedEvent.timelineSequence) !== undefined;
+    const hasSource = getDisplayIndexForSequence(selectedEvent.sourceSequence) !== undefined;
     if (!hasTimeline && !hasSource) {
       setSelectedEvent(null);
     }
-  }, [selectedEvent, sequenceToDisplayIndex]);
-
-  const collectSequences = useCallback((display: DisplayEventSnapshot): number[] => {
-    const sequences = new Set<number>();
-    sequences.add(display.event.sequence);
-    const aggregated = display.aggregated?.events;
-    if (aggregated) {
-      aggregated.forEach((segment) => sequences.add(segment.sequence));
-    }
-    return [...sequences];
-  }, []);
+  }, [displayEvents, selectedEvent]);
 
   const highlightSequences = useMemo(() => {
     if (selectedEvent) {
-      return new Set(selectedEvent.sequences);
-    }
-    if (activeSequence !== null) {
-      const displayIndex = sequenceToDisplayIndex.get(activeSequence);
+      const displayIndex = getDisplayIndexForSequence(selectedEvent.timelineSequence);
       const display = displayIndex !== undefined ? displayEvents[displayIndex] : undefined;
       if (display) {
-        return new Set(collectSequences(display));
+        return new Set(display.sequences);
+      }
+      return new Set([selectedEvent.sourceSequence, selectedEvent.timelineSequence]);
+    }
+    if (activeSequence !== null) {
+      const displayIndex = getDisplayIndexForSequence(activeSequence);
+      const display = displayIndex !== undefined ? displayEvents[displayIndex] : undefined;
+      if (display) {
+        return new Set(display.sequences);
       }
     }
     return new Set<number>();
-  }, [activeSequence, collectSequences, displayEvents, selectedEvent, sequenceToDisplayIndex]);
+  }, [activeSequence, displayEvents, selectedEvent]);
 
   const handleCircleSelect = useCallback(
     (selection: CircleSelection) => {
-      const primaryIndex = sequenceToDisplayIndex.get(selection.latestSequence);
-      const fallbackIndex = sequenceToDisplayIndex.get(selection.primarySequence);
+      const primaryIndex = getDisplayIndexForSequence(selection.latestSequence);
+      const fallbackIndex = getDisplayIndexForSequence(selection.primarySequence);
       const index = primaryIndex ?? fallbackIndex;
       if (index === undefined) {
         return;
@@ -177,15 +158,13 @@ export default function App() {
       if (!display) {
         return;
       }
-      const sequences = collectSequences(display);
       setSelectedEvent({
         sourceSequence: selection.latestSequence,
         timelineSequence: display.event.sequence,
-        sequences,
       });
       virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "smooth" });
     },
-    [collectSequences, displayEvents, sequenceToDisplayIndex]
+    [displayEvents]
   );
 
   const renderDisplayEvent = (display: DisplayEventSnapshot) => {
@@ -199,44 +178,23 @@ export default function App() {
     const titleText = badgeLabel ? `${event.actionType} • ${badgeLabel}` : event.actionType;
     const accentStyle = { "--accent-color": color } as CSSProperties;
     const badgeStyle = subtypeColor ? ({ backgroundColor: subtypeColor } as CSSProperties) : undefined;
-    const actionPayload = aggregated
-      ? {
-          aggregated: true,
-          subtype: aggregated.subtype,
-          combinedText: aggregated.combinedText,
-          segments: aggregated.events.map((segment) => ({
-            sequence: segment.sequence,
-            timestampMs: segment.timestampMs,
-            action: segment.action,
-          })),
-        }
-      : event.action;
-
-    const actionJson = (
-      <pre className="event-json">{stringify(actionPayload)}</pre>
-    );
+    const actionJson = <pre className="event-json">{display.actionJson}</pre>;
 
     const isActive =
       activeSequence !== null &&
       (event.sequence === activeSequence ||
         aggregated?.events.some((segment) => segment.sequence === activeSequence));
 
-    const isSelected = selectedEvent
-      ? selectedEvent.timelineSequence === event.sequence ||
-        aggregated?.events.some((segment) => segment.sequence === selectedEvent.sourceSequence)
-      : false;
+    const isSelected = selectedEvent ? selectedEvent.timelineSequence === event.sequence : false;
     const handleSelect = () => {
-      setSelectedEvent((prev) => {
-        if (prev && prev.timelineSequence === event.sequence) {
-          return null;
-        }
-        const sequences = collectSequences(display);
-        return {
-          sourceSequence: event.sequence,
-          timelineSequence: event.sequence,
-          sequences,
-        } satisfies SelectedEventState;
-      });
+      setSelectedEvent((prev) =>
+        prev && prev.timelineSequence === event.sequence
+          ? null
+          : {
+              sourceSequence: event.sequence,
+              timelineSequence: event.sequence,
+            }
+      );
     };
 
     return (
@@ -291,7 +249,7 @@ export default function App() {
             </section>
             <section className="event-state" style={{ background: stateBackground }}>
               <h2>State after action</h2>
-              <pre className="state-json">{stringify(event.state ?? {})}</pre>
+              <pre className="state-json">{formatJson(event.state ?? {})}</pre>
             </section>
           </div>
         </details>

@@ -1,5 +1,6 @@
 import {
   AggregatedDelta,
+  AggregatedSegment,
   DisplayEvent,
   ProtocolEventAction,
   ProtocolEventMessage,
@@ -11,19 +12,58 @@ const DELTA_SUBTYPES = new Set(["agent_message_delta", "agent_reasoning_delta"])
 
 type PendingAggregate = {
   key: string;
-  subtype: string;
-  firstEvent: VisualizerEvent;
-  combinedText: string;
-  events: VisualizerEvent[];
-  displayIndex: number;
+  entry: DisplayEvent;
+  index: number;
 };
 
 export type DisplayAggregatorState = {
   pending: PendingAggregate | null;
+  sequenceIndex: Map<number, number>;
 };
 
 export function createAggregatorState(): DisplayAggregatorState {
-  return { pending: null };
+  return {
+    pending: null,
+    sequenceIndex: new Map(),
+  };
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function registerSequence(
+  sequence: number,
+  index: number,
+  state: DisplayAggregatorState
+) {
+  state.sequenceIndex.set(sequence, index);
+}
+
+function updateSerializedAction(entry: DisplayEvent) {
+  if (entry.aggregated) {
+    const segments: AggregatedSegment[] = entry.aggregatedSegments ?? [];
+    entry.actionJson = prettyJson({
+      aggregated: true,
+      subtype: entry.aggregated.subtype,
+      combinedText: entry.aggregated.combinedText,
+      segments,
+    });
+    return;
+  }
+
+  entry.actionJson = prettyJson(entry.event.action);
+}
+
+function ensureAggregatedSegments(entry: DisplayEvent): AggregatedSegment[] {
+  if (!entry.aggregatedSegments) {
+    entry.aggregatedSegments = [];
+  }
+  return entry.aggregatedSegments;
 }
 
 function extractProtocolEvent(action: unknown): ProtocolEventPayload | null {
@@ -67,31 +107,89 @@ function protocolEventDelta(action: unknown): string | null {
   return typeof delta === "string" ? delta : null;
 }
 
-function writeAggregateEntry(target: DisplayEvent[], pending: PendingAggregate): DisplayEvent {
-  const last = pending.events[pending.events.length - 1];
-  const entry: DisplayEvent = {
-    event: {
-      ...pending.firstEvent,
-      state: last.state,
-    },
-    subtype: pending.subtype,
-    aggregated: {
-      subtype: pending.subtype,
-      combinedText: pending.combinedText,
-      events: pending.events.slice(),
-    } satisfies AggregatedDelta,
+function startAggregate(
+  target: DisplayEvent[],
+  state: DisplayAggregatorState,
+  key: string,
+  event: VisualizerEvent,
+  subtype: string,
+  delta: string
+): DisplayEvent {
+  const aggregated: AggregatedDelta = {
+    subtype,
+    combinedText: delta,
+    events: [event],
   };
-  target[pending.displayIndex] = entry;
+
+  const entry: DisplayEvent = {
+    event: { ...event },
+    subtype,
+    aggregated,
+    aggregatedSegments: [
+      {
+        sequence: event.sequence,
+        timestampMs: event.timestampMs,
+        action: event.action,
+      },
+    ],
+    sequences: [event.sequence],
+    actionJson: "",
+  };
+
+  updateSerializedAction(entry);
+  target.push(entry);
+  const index = target.length - 1;
+  registerSequence(event.sequence, index, state);
+  state.pending = { key, entry, index } satisfies PendingAggregate;
   return entry;
 }
 
 function pushSimpleEvent(
   target: DisplayEvent[],
+  state: DisplayAggregatorState,
   event: VisualizerEvent,
   subtype: string | null
 ): DisplayEvent {
-  const entry: DisplayEvent = { event, subtype };
+  const entry: DisplayEvent = {
+    event,
+    subtype,
+    sequences: [event.sequence],
+    actionJson: "",
+  };
+  updateSerializedAction(entry);
   target.push(entry);
+  registerSequence(event.sequence, target.length - 1, state);
+  state.pending = null;
+  return entry;
+}
+
+function appendToAggregate(
+  state: DisplayAggregatorState,
+  event: VisualizerEvent,
+  delta: string
+): DisplayEvent | null {
+  if (!state.pending) {
+    return null;
+  }
+
+  const { entry, index } = state.pending;
+  const aggregated = entry.aggregated;
+  if (!aggregated) {
+    return null;
+  }
+
+  aggregated.events.push(event);
+  aggregated.combinedText += delta;
+  entry.event.state = event.state;
+  entry.event.timestampMs = event.timestampMs;
+  ensureAggregatedSegments(entry).push({
+    sequence: event.sequence,
+    timestampMs: event.timestampMs,
+    action: event.action,
+  });
+  entry.sequences.push(event.sequence);
+  registerSequence(event.sequence, index, state);
+  updateSerializedAction(entry);
   return entry;
 }
 
@@ -106,21 +204,14 @@ function processProtocolDelta(
   const key = `${id}::${subtype}`;
 
   if (state.pending && state.pending.key === key) {
-    state.pending.events.push(event);
-    state.pending.combinedText += delta;
-    return writeAggregateEntry(target, state.pending);
+    const existing = appendToAggregate(state, event, delta);
+    if (existing) {
+      return existing;
+    }
   }
 
-  state.pending = {
-    key,
-    subtype,
-    firstEvent: event,
-    combinedText: delta,
-    events: [event],
-    displayIndex: target.length,
-  } satisfies PendingAggregate;
-  target.push({ event, subtype: null });
-  return writeAggregateEntry(target, state.pending);
+  state.pending = null;
+  return startAggregate(target, state, key, event, subtype, delta);
 }
 
 function processEvent(
@@ -137,8 +228,7 @@ function processEvent(
     }
   }
 
-  state.pending = null;
-  return pushSimpleEvent(target, event, subtype);
+  return pushSimpleEvent(target, state, event, subtype);
 }
 
 export function rebuildDisplayEvents(
@@ -148,6 +238,7 @@ export function rebuildDisplayEvents(
 ) {
   target.splice(0, target.length);
   state.pending = null;
+  state.sequenceIndex.clear();
   const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
   for (const event of sorted) {
     processEvent(target, state, event);
@@ -167,4 +258,11 @@ export function aggregateDisplayEvents(events: VisualizerEvent[]): DisplayEvent[
   const displayEvents: DisplayEvent[] = [];
   rebuildDisplayEvents(events, displayEvents, state);
   return displayEvents;
+}
+
+export function lookupSequenceIndex(
+  state: DisplayAggregatorState,
+  sequence: number
+): number | undefined {
+  return state.sequenceIndex.get(sequence);
 }

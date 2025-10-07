@@ -3,6 +3,7 @@ import { useSnapshot } from "valtio/react";
 import {
   appendDisplayEvent,
   createAggregatorState,
+  lookupSequenceIndex,
   rebuildDisplayEvents,
 } from "./eventAggregator";
 import {
@@ -117,3 +118,7 @@ export function getVisualizerStore() {
 }
 
 export const VISUALIZER_MAX_EVENTS = MAX_EVENTS;
+
+export function getDisplayIndexForSequence(sequence: number): number | undefined {
+  return lookupSequenceIndex(aggregatorState, sequence);
+}

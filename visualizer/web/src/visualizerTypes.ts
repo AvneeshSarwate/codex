@@ -28,10 +28,19 @@ export type AggregatedDelta = {
   events: VisualizerEvent[];
 };
 
+export type AggregatedSegment = {
+  sequence: number;
+  timestampMs: number;
+  action: unknown;
+};
+
 export type DisplayEvent = {
   event: VisualizerEvent;
   subtype: string | null;
   aggregated?: AggregatedDelta;
+  aggregatedSegments?: AggregatedSegment[];
+  sequences: number[];
+  actionJson: string;
 };
 
 export type ReplayPlaybackStatus = "idle" | "playing" | "paused";

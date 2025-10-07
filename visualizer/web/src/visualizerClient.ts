@@ -8,12 +8,47 @@ import {
   subscribeToVisualizerStore,
   useVisualizerSnapshot,
 } from "./visualizerStore";
-import { ConnectionStatus, VisualizerSocketMessage } from "./visualizerTypes";
+import { ConnectionStatus, VisualizerEvent, VisualizerSocketMessage } from "./visualizerTypes";
 
 const WEBSOCKET_URL = import.meta.env.VITE_VISUALIZER_WS ?? "ws://localhost:4100/?role=viewer";
 const RECONNECT_DELAY_MS = 1000;
 
 type ConnectionToken = symbol;
+
+let pendingEvents: VisualizerEvent[] = [];
+let flushHandle: number | null = null;
+
+function flushPendingEvents() {
+  flushHandle = null;
+  if (pendingEvents.length === 0) {
+    return;
+  }
+  const batch = pendingEvents;
+  pendingEvents = [];
+  for (const event of batch) {
+    pushEvent(event);
+  }
+}
+
+function scheduleFlush() {
+  if (flushHandle !== null) {
+    return;
+  }
+  flushHandle = window.requestAnimationFrame(flushPendingEvents);
+}
+
+function enqueueEvent(event: VisualizerEvent) {
+  pendingEvents.push(event);
+  scheduleFlush();
+}
+
+function clearPendingEvents() {
+  pendingEvents = [];
+  if (flushHandle !== null) {
+    window.cancelAnimationFrame(flushHandle);
+    flushHandle = null;
+  }
+}
 
 class VisualizerConnection {
   private readonly url: string;
@@ -77,12 +112,13 @@ class VisualizerConnection {
       }
 
       if (message.type === "backlog") {
+        clearPendingEvents();
         replaceEvents(message.events);
         return;
       }
 
       if (message.type === "event") {
-        pushEvent(message.event);
+        enqueueEvent(message.event);
         return;
       }
 
@@ -132,6 +168,7 @@ class VisualizerConnection {
   private shutdown() {
     this.shouldReconnect = false;
     this.clearReconnectTimer();
+    clearPendingEvents();
     if (this.socket) {
       const socket = this.socket;
       this.socket = null;
