@@ -185,14 +185,22 @@ body {
 .timeline-virtuoso {
   flex: 1;
   height: 100%;
+  padding: 1.5rem 2.5rem 2.5rem;
+  box-sizing: border-box;
 }
 
 .timeline-virtuoso [data-item-index] {
-  margin-bottom: 1rem;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.5rem;
 }
 
 .timeline-virtuoso [data-item-index]:last-child {
   margin-bottom: 0;
+}
+
+.timeline-virtuoso [data-item-index] > * {
+  width: min(960px, 100%);
 }
 
 .event-item {

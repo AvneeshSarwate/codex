@@ -32,7 +32,7 @@ export default function App() {
   const previousModeRef = useRef(replay.mode);
   const prevLengthRef = useRef(-1);
 
-  const followOutput = replay.mode === "live" ? "smooth" : undefined;
+  const followOutput = replay.mode === "live" ? "auto" : false;
 
   const sequenceToDisplayIndex = useMemo(() => {
     const map = new Map<number, number>();
@@ -101,7 +101,7 @@ export default function App() {
     virtuosoRef.current?.scrollToIndex({
       index: activeReplayIndex,
       align: "center",
-      behavior: replay.status === "playing" ? "auto" : "smooth",
+      behavior: "auto",
     });
   }, [activeReplayIndex, replay.mode, replay.status]);
 
