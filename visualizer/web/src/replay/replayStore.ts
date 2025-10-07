@@ -81,18 +81,23 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
 
     const entry = active.get(matchKey);
     if (entry) {
+      entry.fill = fill;
+      entry.stroke = stroke;
+      entry.subtype = subtype;
+      entry.actionType = event.actionType;
+      entry.latestSequence = Math.max(entry.latestSequence, event.sequence);
       circles.push({
         id: `replay-circle-${event.sequence}`,
-        actionType: entry.actionType,
+        actionType: event.actionType,
         subtype,
-        fill: entry.fill,
-        stroke: entry.stroke,
+        fill,
+        stroke,
         chargingStart: entry.chargingStart,
         launchTime: time,
         stackIndex,
         matchKey: entry.matchKey,
         primarySequence: entry.startSequence,
-        latestSequence: Math.max(entry.latestSequence, event.sequence),
+        latestSequence: entry.latestSequence,
       });
       active.delete(matchKey);
     } else {

@@ -104,6 +104,7 @@ export class Launcher {
         circle.charge += 1;
         circle.lastUpdate = now;
         circle.subtype = subtype;
+        circle.eventType = event.actionType;
         circle.fill = fillColor;
         circle.stroke = primaryColor;
         circle.latestSequence = Math.max(circle.latestSequence, event.sequence);
@@ -112,6 +113,10 @@ export class Launcher {
 
       const pending = this.charging.get(matchKey);
       if (pending) {
+        pending.subtype = subtype;
+        pending.eventType = event.actionType;
+        pending.fill = fillColor;
+        pending.stroke = primaryColor;
         pending.state = "flying";
         pending.launchedAt = now;
         pending.lastUpdate = now;

@@ -5,7 +5,10 @@ import { CircleSnapshot } from "./launcher";
 const CANVAS_SCALE = Math.min(SKETCH_WIDTH, SKETCH_HEIGHT);
 const BASE_BACKGROUND = "#0c1220";
 const HIGHLIGHT_STROKE = "#ffffff";
-const HIGHLIGHT_EXTRA_RADIUS = 6;
+const HIGHLIGHT_EXTRA_RADIUS = 10;
+const HIGHLIGHT_STROKE_WIDTH = 5;
+const STROKE_WIDTH_FLYING = 4;
+const STROKE_WIDTH_CHARGING = 3;
 
 export type CircleSelection = {
   primarySequence: number;
@@ -96,7 +99,7 @@ export class KonvaStageManager {
     const radius = snapshot.radius * CANVAS_SCALE;
     const x = snapshot.x * SKETCH_WIDTH;
     const y = snapshot.y * SKETCH_HEIGHT;
-    const strokeWidth = snapshot.state === "flying" ? 3 : 2;
+    const strokeWidth = snapshot.state === "flying" ? STROKE_WIDTH_FLYING : STROKE_WIDTH_CHARGING;
     const highlight = this.shouldHighlight(snapshot);
 
     const node = this.circles.get(snapshot.id);
@@ -125,6 +128,7 @@ export class KonvaStageManager {
       if (highlightCircle) {
         this.circleLayer.add(highlightCircle);
         highlightCircle.moveToTop();
+        shape.moveToTop();
       }
 
       this.circles.set(snapshot.id, {
@@ -151,6 +155,7 @@ export class KonvaStageManager {
       node.highlight.radius(radius + HIGHLIGHT_EXTRA_RADIUS);
       node.highlight.visible(true);
       node.highlight.moveToTop();
+      node.shape.moveToTop();
     } else if (node.highlight) {
       node.highlight.destroy();
       node.highlight = null;
@@ -168,7 +173,7 @@ export class KonvaStageManager {
       y,
       radius,
       stroke: HIGHLIGHT_STROKE,
-      strokeWidth: 4,
+      strokeWidth: HIGHLIGHT_STROKE_WIDTH,
       listening: false,
     });
   }
