@@ -4,6 +4,7 @@ import { actionBackground, colorForAction, stateBackground } from "./theme";
 import { useVisualizerData } from "./visualizerClient";
 import { DisplayEvent } from "./visualizerTypes";
 import { VisualizerSketch } from "./VisualizerSketch";
+import { ReplayControls } from "./replay/ReplayControls";
 
 function formatTimestamp(timestampMs: number) {
   const date = new Date(timestampMs);
@@ -100,7 +101,7 @@ function renderDisplayEvent(display: Snapshot<DisplayEvent>) {
 }
 
 export default function App() {
-  const { displayEvents, connectionStatus } = useVisualizerData();
+  const { displayEvents, connectionStatus, events } = useVisualizerData();
 
   return (
     <div className="app">
@@ -109,6 +110,7 @@ export default function App() {
         <div className="status">WebSocket status: {connectionStatus}</div>
       </header>
       <VisualizerSketch />
+      <ReplayControls eventCount={events.length} />
       <main className="timeline">
         {displayEvents.length === 0 ? (
           <div className="empty-state">

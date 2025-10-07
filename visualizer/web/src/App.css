@@ -58,6 +58,121 @@ body {
   display: block;
 }
 
+.replay-controls {
+  width: min(960px, calc(100% - 4rem));
+  margin: 1.25rem auto 0;
+  padding: 0.75rem 1rem;
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  border-radius: 0.75rem;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.replay-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.replay-controls-main {
+  align-items: center;
+}
+
+.replay-status {
+  font-size: 0.9rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.replay-pending {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+  border-radius: 9999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.replay-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.replay-button {
+  border: none;
+  border-radius: 0.5rem;
+  background: #3b82f6;
+  color: #f8fafc;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.replay-button:not(:disabled):hover {
+  background: #2563eb;
+}
+
+.replay-button:disabled {
+  background: rgba(148, 163, 184, 0.35);
+  cursor: not-allowed;
+}
+
+.replay-slider {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.replay-slider input[type="range"] {
+  width: 100%;
+  accent-color: #38bdf8;
+}
+
+.replay-slider input[type="range"][disabled] {
+  opacity: 0.45;
+}
+
+.replay-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #cbd5f5;
+}
+
+.replay-speed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+}
+
+.replay-speed select {
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  color: inherit;
+}
+
+.replay-speed select:disabled {
+  opacity: 0.6;
+}
+
 .timeline {
   flex: 1;
   padding: 1.5rem 2rem 2rem;

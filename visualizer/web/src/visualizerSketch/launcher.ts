@@ -60,6 +60,11 @@ export class Launcher {
   private readonly circles: LaunchCircle[] = [];
   private readonly charging = new Map<string, LaunchCircle>();
 
+  reset() {
+    this.circles.splice(0, this.circles.length);
+    this.charging.clear();
+  }
+
   processEvents(events: VisualizerEvent[], timestamp: number) {
     if (events.length === 0) {
       return;

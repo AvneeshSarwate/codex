@@ -158,7 +158,9 @@ export function ensureVisualizerConnection(): () => void {
 
 export function useVisualizerData() {
   useEffect(ensureVisualizerConnection, []);
-  return useVisualizerSnapshot();
+  const snapshot = useVisualizerSnapshot();
+  const displayEvents = snapshot.replay.mode === "replay" ? snapshot.replay.displayEvents : snapshot.displayEvents;
+  return { ...snapshot, displayEvents };
 }
 
 export function getVisualizerState() {

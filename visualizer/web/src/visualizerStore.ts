@@ -10,11 +10,28 @@ import {
   DisplayEvent,
   VisualizerEvent,
   VisualizerState,
+  ReplayState,
 } from "./visualizerTypes";
 
 const MAX_EVENTS = 50000;
 
 const aggregatorState = createAggregatorState();
+
+export function createInitialReplayState(): ReplayState {
+  return {
+    mode: "live",
+    status: "idle",
+    speed: 1,
+    cursor: -1,
+    currentTime: 0,
+    duration: 0,
+    baseTimestampMs: null,
+    buffer: [],
+    displayEvents: [],
+    pendingLive: 0,
+    pendingFrame: null,
+  } satisfies ReplayState;
+}
 
 const displayEventListeners = new Set<(event: DisplayEvent) => void>();
 
@@ -22,6 +39,7 @@ export const visualizerStore = proxy<VisualizerState>({
   connectionStatus: "idle",
   events: [],
   displayEvents: [],
+  replay: createInitialReplayState(),
 });
 
 function notifyLiveListeners(event: DisplayEvent) {
@@ -38,6 +56,9 @@ export function replaceEvents(events: VisualizerEvent[]) {
   const trimmed = events.slice(-MAX_EVENTS);
   visualizerStore.events.splice(0, visualizerStore.events.length, ...trimmed);
   rebuildDisplayEvents(trimmed, visualizerStore.displayEvents, aggregatorState);
+  if (visualizerStore.replay.mode === "replay") {
+    visualizerStore.replay.pendingLive = 0;
+  }
 }
 
 export function pushEvent(event: VisualizerEvent): DisplayEvent | null {
@@ -55,6 +76,10 @@ export function pushEvent(event: VisualizerEvent): DisplayEvent | null {
     ? visualizerStore.displayEvents[visualizerStore.displayEvents.length - 1] ?? null
     : appendDisplayEvent(event, visualizerStore.displayEvents, aggregatorState);
 
+  if (visualizerStore.replay.mode === "replay") {
+    visualizerStore.replay.pendingLive += 1;
+  }
+
   if (entry) {
     notifyLiveListeners(entry);
   }
@@ -71,6 +96,10 @@ export function onDisplayEvent(listener: (event: DisplayEvent) => void): () => v
 
 export function useVisualizerSnapshot() {
   return useSnapshot(visualizerStore);
+}
+
+export function useReplaySnapshot() {
+  return useSnapshot(visualizerStore).replay;
 }
 
 export function subscribeToVisualizerStore(

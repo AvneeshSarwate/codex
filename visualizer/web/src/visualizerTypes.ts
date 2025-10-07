@@ -34,6 +34,34 @@ export type DisplayEvent = {
   aggregated?: AggregatedDelta;
 };
 
+export type ReplayPlaybackStatus = "idle" | "playing" | "paused";
+
+export type ReplayMode = "live" | "replay";
+
+export type ReplayEvent = VisualizerEvent & {
+  relativeTime: number;
+};
+
+export type ReplayFrameUpdate = {
+  timestamp: number;
+  events: VisualizerEvent[];
+  reset: boolean;
+};
+
+export type ReplayState = {
+  mode: ReplayMode;
+  status: ReplayPlaybackStatus;
+  speed: number;
+  cursor: number;
+  currentTime: number;
+  duration: number;
+  baseTimestampMs: number | null;
+  buffer: ReplayEvent[];
+  displayEvents: DisplayEvent[];
+  pendingLive: number;
+  pendingFrame: ReplayFrameUpdate | null;
+};
+
 export type ConnectionStatus =
   | "connecting"
   | "connected"
@@ -45,6 +73,7 @@ export type VisualizerState = {
   connectionStatus: ConnectionStatus;
   events: VisualizerEvent[];
   displayEvents: DisplayEvent[];
+  replay: ReplayState;
 };
 
 export type VisualizerSocketMessage =

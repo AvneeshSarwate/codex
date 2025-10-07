@@ -1,17 +1,31 @@
 import p5 from "p5";
 import { getVisualizerState } from "../visualizerClient";
-import { VisualizerEvent } from "../visualizerTypes";
+import { ReplayEvent, VisualizerEvent } from "../visualizerTypes";
+import {
+  advanceReplay,
+  consumePendingReplayFrame,
+  isReplayMode,
+  replayStatus,
+} from "../replay/replayStore";
 import { Launcher } from "./launcher";
 
 const CANVAS_WIDTH = 640;
 const CANVAS_HEIGHT = 480;
 
-export function createVisualizerSketch(launcher: Launcher) {
-  let lastSequenceSeen = -1;
+function eventTime(event: VisualizerEvent, fallback: number): number {
+  const replayEvent = event as ReplayEvent;
+  if (typeof replayEvent.relativeTime === "number") {
+    return replayEvent.relativeTime;
+  }
+  return fallback;
+}
 
-  function drainNewEvents(): VisualizerEvent[] {
-    const store = getVisualizerState();
-    const events = store.events;
+export function createVisualizerSketch(launcher: Launcher) {
+  let liveSequenceSeen = -1;
+  let lastMode: "live" | "replay" = "live";
+
+  function drainLiveEvents(): VisualizerEvent[] {
+    const { events } = getVisualizerState();
     if (!events || events.length === 0) {
       return [];
     }
@@ -19,7 +33,7 @@ export function createVisualizerSketch(launcher: Launcher) {
     const fresh: VisualizerEvent[] = [];
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
-      if (event.sequence <= lastSequenceSeen) {
+      if (event.sequence <= liveSequenceSeen) {
         break;
       }
       fresh.push(event);
@@ -30,8 +44,35 @@ export function createVisualizerSketch(launcher: Launcher) {
     }
 
     fresh.reverse();
-    lastSequenceSeen = fresh[fresh.length - 1]?.sequence ?? lastSequenceSeen;
+    liveSequenceSeen = fresh[fresh.length - 1]?.sequence ?? liveSequenceSeen;
     return fresh;
+  }
+
+  function updateLiveSequenceToLatest() {
+    const { events } = getVisualizerState();
+    if (!events || events.length === 0) {
+      liveSequenceSeen = -1;
+      return;
+    }
+    liveSequenceSeen = events[events.length - 1]?.sequence ?? -1;
+  }
+
+  function renderCircles(p: p5, timestamp: number) {
+    const circles = launcher.update(timestamp);
+
+    p.background(12, 18, 32);
+    const scale = Math.min(CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    for (const circle of circles) {
+      const x = circle.x * CANVAS_WIDTH;
+      const y = circle.y * CANVAS_HEIGHT;
+      const radius = circle.radius * scale;
+
+      p.stroke(circle.stroke);
+      p.strokeWeight(circle.state === "flying" ? 3 : 2);
+      p.fill(circle.fill);
+      p.circle(x, y, radius * 2);
+    }
   }
 
   return (p: p5) => {
@@ -43,27 +84,49 @@ export function createVisualizerSketch(launcher: Launcher) {
     };
 
     p.draw = () => {
-      const timestamp = p.millis() / 1000;
-      const newEvents = drainNewEvents();
-      if (newEvents.length > 0) {
-        launcher.processEvents(newEvents, timestamp);
+      const nowSeconds = p.millis() / 1000;
+      const deltaSeconds = p.deltaTime / 1000;
+      const replayMode = isReplayMode();
+
+      if (!replayMode && lastMode === "replay") {
+        launcher.reset();
+        updateLiveSequenceToLatest();
+      }
+      lastMode = replayMode ? "replay" : "live";
+
+      if (!replayMode) {
+        const events = drainLiveEvents();
+        if (events.length > 0) {
+          launcher.processEvents(events, nowSeconds);
+        }
+        renderCircles(p, nowSeconds);
+        return;
       }
 
-      const circles = launcher.update(timestamp);
-
-      p.background(12, 18, 32);
-      const scale = Math.min(CANVAS_WIDTH, CANVAS_HEIGHT);
-
-      for (const circle of circles) {
-        const x = circle.x * CANVAS_WIDTH;
-        const y = circle.y * CANVAS_HEIGHT;
-        const radius = circle.radius * scale;
-
-        p.stroke(circle.stroke);
-        p.strokeWeight(circle.state === "flying" ? 3 : 2);
-        p.fill(circle.fill);
-        p.circle(x, y, radius * 2);
+      if (replayStatus() === "playing") {
+        advanceReplay(deltaSeconds);
       }
+
+      let latestTimestamp: number | null = null;
+      let frame = consumePendingReplayFrame();
+      while (frame) {
+        latestTimestamp = frame.timestamp;
+        if (frame.reset) {
+          launcher.reset();
+        }
+        if (frame.events.length > 0) {
+          for (const event of frame.events) {
+            const eventTimestamp = eventTime(event, frame.timestamp);
+            launcher.processEvents([event], eventTimestamp);
+            latestTimestamp = eventTimestamp;
+          }
+        }
+        frame = consumePendingReplayFrame();
+      }
+
+      const replayState = getVisualizerState().replay;
+      const timestamp = latestTimestamp ?? replayState.currentTime;
+      renderCircles(p, timestamp);
     };
   };
 }
