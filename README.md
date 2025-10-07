@@ -1,3 +1,16 @@
+## Fork Description
+
+This is a fork of codex that adds a local web application to visualize all of the various agent events and actions. The core Rust codebase is functionally the same, except for sending events to a local node.js websocket server. A local web application listens for these events bounced from the websocket server and visualizes them. 
+
+To bring up the visualizer locally:
+1. Start the websocket relay: `cd visualizer/server && npm install && npm run start` (listens on port 4100 by default, override with `CODEX_VISUALIZER_PORT`).
+2. Launch the web UI: `cd visualizer/web && npm install && npm run dev` (served via Vite on http://localhost:4173).
+3. Run the Codex CLI with the `CODEX_VISUALIZER_WS` environment variable pointing at the websocket server (default value `ws://localhost:4100`) so agent events stream into the browser session.
+
+
+This is a starting point project to both learn about codex's agent architecture and more generally about how coding agents make decisions. The goal is to experiment with interfaces that allow for more transparency around the decision-making process and interfaces to allow for more granular forking of actions after discovering "mistakes" or "errors" in the decisions made.
+
+
 <p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
