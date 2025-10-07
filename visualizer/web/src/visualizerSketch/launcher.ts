@@ -1,5 +1,5 @@
 import { colorForAction } from "../theme";
-import { VisualizerEvent } from "../visualizerTypes";
+import { VisualizerEvent, ReplayCircle } from "../visualizerTypes";
 import { eventId, eventSubtype, isDeltaEvent } from "./eventDetails";
 
 const BASE_Y = 2 / 3;
@@ -9,6 +9,7 @@ const MAX_RADIUS = 0.12;
 const GROWTH_PER_DELTA = 0.75;
 const PASSIVE_GROWTH_PER_SECOND = 0.35;
 const TRAVEL_DURATION = 1;
+const EPSILON = 1e-6;
 
 export type CircleSnapshot = {
   id: string;
@@ -183,6 +184,62 @@ export class Launcher {
         fill: circle.fill,
         stroke: circle.stroke,
         state: circle.state,
+      });
+    }
+
+    return snapshots;
+  }
+
+  static fromReplay(circles: ReplayCircle[], timestamp: number): CircleSnapshot[] {
+    const chargingCandidates = circles
+      .filter((circle) => circle.launchTime === null || timestamp + EPSILON < circle.launchTime)
+      .slice()
+      .sort((a, b) => a.chargingStart - b.chargingStart);
+
+    const chargingPositions = new Map<string, number>();
+    chargingCandidates.forEach((circle, index) => {
+      chargingPositions.set(circle.id, index);
+    });
+
+    const snapshots: CircleSnapshot[] = [];
+
+    for (const circle of circles) {
+      if (timestamp + EPSILON < circle.chargingStart) {
+        continue;
+      }
+
+      const activeTime = Math.max(0, Math.min(timestamp, circle.launchTime ?? timestamp) - circle.chargingStart);
+      const growth = 1 - Math.exp(-activeTime * GROWTH_PER_DELTA);
+      const radius = BASE_RADIUS + (MAX_RADIUS - BASE_RADIUS) * growth;
+
+      if (circle.launchTime !== null && timestamp >= circle.launchTime - EPSILON) {
+        const flyElapsed = timestamp - circle.launchTime;
+        const progress = flyElapsed / TRAVEL_DURATION;
+        if (progress >= 1.05) {
+          continue;
+        }
+
+        snapshots.push({
+          id: circle.id,
+          x: 1 - progress,
+          y: Math.max(0.05, BASE_Y - circle.stackIndex * STACK_SPACING),
+          radius: Math.min(radius, MAX_RADIUS),
+          fill: circle.fill,
+          stroke: circle.stroke,
+          state: "flying",
+        });
+        continue;
+      }
+
+      const stackIndex = chargingPositions.get(circle.id) ?? 0;
+      snapshots.push({
+        id: circle.id,
+        x: 1,
+        y: Math.max(0.05, BASE_Y - stackIndex * STACK_SPACING),
+        radius: Math.min(radius, MAX_RADIUS),
+        fill: circle.fill,
+        stroke: circle.stroke,
+        state: "charging",
       });
     }
 

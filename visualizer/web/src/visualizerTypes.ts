@@ -48,6 +48,17 @@ export type ReplayFrameUpdate = {
   reset: boolean;
 };
 
+export type ReplayCircle = {
+  id: string;
+  actionType: string;
+  subtype: string | null;
+  fill: string;
+  stroke: string;
+  chargingStart: number;
+  launchTime: number | null;
+  stackIndex: number;
+};
+
 export type ReplayState = {
   mode: ReplayMode;
   status: ReplayPlaybackStatus;
@@ -60,6 +71,7 @@ export type ReplayState = {
   displayEvents: DisplayEvent[];
   pendingLive: number;
   pendingFrame: ReplayFrameUpdate | null;
+  circles: ReplayCircle[];
 };
 
 export type ConnectionStatus =

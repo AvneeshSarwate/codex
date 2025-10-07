@@ -30,6 +30,7 @@ export function createInitialReplayState(): ReplayState {
     displayEvents: [],
     pendingLive: 0,
     pendingFrame: null,
+    circles: [],
   } satisfies ReplayState;
 }
 

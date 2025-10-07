@@ -1,24 +1,15 @@
 import p5 from "p5";
 import { getVisualizerState } from "../visualizerClient";
-import { ReplayEvent, VisualizerEvent } from "../visualizerTypes";
+import { VisualizerEvent } from "../visualizerTypes";
 import {
   advanceReplay,
-  consumePendingReplayFrame,
   isReplayMode,
   replayStatus,
 } from "../replay/replayStore";
-import { Launcher } from "./launcher";
+import { Launcher, CircleSnapshot } from "./launcher";
 
 const CANVAS_WIDTH = 640;
 const CANVAS_HEIGHT = 480;
-
-function eventTime(event: VisualizerEvent, fallback: number): number {
-  const replayEvent = event as ReplayEvent;
-  if (typeof replayEvent.relativeTime === "number") {
-    return replayEvent.relativeTime;
-  }
-  return fallback;
-}
 
 export function createVisualizerSketch(launcher: Launcher) {
   let liveSequenceSeen = -1;
@@ -57,13 +48,11 @@ export function createVisualizerSketch(launcher: Launcher) {
     liveSequenceSeen = events[events.length - 1]?.sequence ?? -1;
   }
 
-  function renderCircles(p: p5, timestamp: number) {
-    const circles = launcher.update(timestamp);
-
+  function renderSnapshots(p: p5, snapshots: CircleSnapshot[]) {
     p.background(12, 18, 32);
     const scale = Math.min(CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    for (const circle of circles) {
+    for (const circle of snapshots) {
       const x = circle.x * CANVAS_WIDTH;
       const y = circle.y * CANVAS_HEIGHT;
       const radius = circle.radius * scale;
@@ -99,7 +88,7 @@ export function createVisualizerSketch(launcher: Launcher) {
         if (events.length > 0) {
           launcher.processEvents(events, nowSeconds);
         }
-        renderCircles(p, nowSeconds);
+        renderSnapshots(p, launcher.update(nowSeconds));
         return;
       }
 
@@ -107,26 +96,10 @@ export function createVisualizerSketch(launcher: Launcher) {
         advanceReplay(deltaSeconds);
       }
 
-      let latestTimestamp: number | null = null;
-      let frame = consumePendingReplayFrame();
-      while (frame) {
-        latestTimestamp = frame.timestamp;
-        if (frame.reset) {
-          launcher.reset();
-        }
-        if (frame.events.length > 0) {
-          for (const event of frame.events) {
-            const eventTimestamp = eventTime(event, frame.timestamp);
-            launcher.processEvents([event], eventTimestamp);
-            latestTimestamp = eventTimestamp;
-          }
-        }
-        frame = consumePendingReplayFrame();
-      }
-
       const replayState = getVisualizerState().replay;
-      const timestamp = latestTimestamp ?? replayState.currentTime;
-      renderCircles(p, timestamp);
+      const timestamp = replayState.currentTime;
+      const snapshots = Launcher.fromReplay(replayState.circles, timestamp);
+      renderSnapshots(p, snapshots);
     };
   };
 }

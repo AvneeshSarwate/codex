@@ -1,6 +1,9 @@
 import { aggregateDisplayEvents } from "../eventAggregator";
 import { getVisualizerStore, visualizerStore, createInitialReplayState } from "../visualizerStore";
+import { colorForAction } from "../theme";
+import { eventSubtype, eventId, isDeltaEvent } from "../visualizerSketch/eventDetails";
 import {
+  ReplayCircle,
   ReplayEvent,
   ReplayFrameUpdate,
   ReplayState,
@@ -11,6 +14,107 @@ const EPSILON = 1e-3;
 
 function sortEvents(events: VisualizerEvent[]): VisualizerEvent[] {
   return [...events].sort((a, b) => a.sequence - b.sequence);
+}
+
+function makeMatchKey(event: VisualizerEvent): string {
+  const id = eventId(event);
+  if (id) {
+    return id;
+  }
+  const subtype = eventSubtype(event);
+  return `${event.actionType}::${subtype ?? ""}`;
+}
+
+type ActiveReplayCharge = {
+  matchKey: string;
+  chargingStart: number;
+  fill: string;
+  stroke: string;
+  subtype: string | null;
+  actionType: string;
+  startSequence: number;
+};
+
+function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
+  const circles: ReplayCircle[] = [];
+  const active = new Map<string, ActiveReplayCharge>();
+  const launchStacks = new Map<number, number>();
+
+  for (const event of events) {
+    const subtype = eventSubtype(event);
+    const matchKey = makeMatchKey(event);
+    const stroke = colorForAction(event.actionType);
+    const fill = colorForAction(subtype ?? event.actionType);
+    const time = event.relativeTime;
+
+    if (isDeltaEvent(event)) {
+      if (!active.has(matchKey)) {
+        active.set(matchKey, {
+          matchKey,
+          chargingStart: time,
+          fill,
+          stroke,
+          subtype,
+          actionType: event.actionType,
+          startSequence: event.sequence,
+        });
+      } else {
+        const entry = active.get(matchKey)!;
+        entry.fill = fill;
+        entry.stroke = stroke;
+        entry.subtype = subtype;
+        entry.actionType = event.actionType;
+      }
+      continue;
+    }
+
+    const stackKey = Math.round(time * 1000);
+    const stackIndex = launchStacks.get(stackKey) ?? 0;
+    launchStacks.set(stackKey, stackIndex + 1);
+
+    const entry = active.get(matchKey);
+    if (entry) {
+      circles.push({
+        id: `replay-circle-${event.sequence}`,
+        actionType: entry.actionType,
+        subtype,
+        fill: entry.fill,
+        stroke: entry.stroke,
+        chargingStart: entry.chargingStart,
+        launchTime: time,
+        stackIndex,
+      });
+      active.delete(matchKey);
+    } else {
+      circles.push({
+        id: `replay-circle-${event.sequence}`,
+        actionType: event.actionType,
+        subtype,
+        fill,
+        stroke,
+        chargingStart: time,
+        launchTime: time,
+        stackIndex,
+      });
+    }
+  }
+
+  const orphaned = [...active.values()]
+    .sort((a, b) => a.chargingStart - b.chargingStart || a.startSequence - b.startSequence);
+  orphaned.forEach((entry, index) => {
+    circles.push({
+      id: `replay-circle-${entry.startSequence}-pending`,
+      actionType: entry.actionType,
+      subtype: entry.subtype,
+      fill: entry.fill,
+      stroke: entry.stroke,
+      chargingStart: entry.chargingStart,
+      launchTime: null,
+      stackIndex: index,
+    });
+  });
+
+  return circles;
 }
 
 function buildReplayBuffer(events: VisualizerEvent[]): ReplayEvent[] {
@@ -43,6 +147,7 @@ export function beginReplay(): boolean {
 
   const buffer = buildReplayBuffer(events);
   const displayEvents = aggregateDisplayEvents(events);
+  const circles = buildReplayCircles(buffer);
   const duration = buffer[buffer.length - 1]?.relativeTime ?? 0;
   const replay = store.replay;
   replay.mode = "replay";
@@ -56,6 +161,7 @@ export function beginReplay(): boolean {
   replay.displayEvents = displayEvents;
   replay.pendingLive = 0;
   replay.pendingFrame = { timestamp: 0, events: [], reset: true } satisfies ReplayFrameUpdate;
+  replay.circles = circles;
   return true;
 }
 
@@ -125,12 +231,15 @@ export function seekReplayToTime(timeSeconds: number): ReplayFrameUpdate {
   if (replay.mode !== "replay") {
     return { timestamp: 0, events: [], reset: false };
   }
+  const previousCursor = replay.cursor;
+  const previousTime = replay.currentTime;
   const clamped = Math.max(0, Math.min(timeSeconds, replay.duration));
   const targetIndex = findTargetIndex(replay, clamped);
-  const rewinding = targetIndex < replay.cursor;
+  const rewinding =
+    targetIndex < previousCursor || clamped + EPSILON < previousTime;
 
   const events: VisualizerEvent[] = [];
-  const startIndex = rewinding ? 0 : replay.cursor + 1;
+  const startIndex = rewinding ? 0 : previousCursor + 1;
   for (let index = startIndex; index <= targetIndex; index += 1) {
     const next = replay.buffer[index];
     if (next) {
