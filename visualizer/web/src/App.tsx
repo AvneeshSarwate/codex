@@ -1,5 +1,6 @@
 import type { Snapshot } from "valtio";
 import { CSSProperties } from "react";
+import { Virtuoso } from "react-virtuoso";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
 import { useVisualizerData } from "./visualizerClient";
 import { DisplayEvent } from "./visualizerTypes";
@@ -19,7 +20,12 @@ function stringify(value: unknown) {
   }
 }
 
-function renderDisplayEvent(display: Snapshot<DisplayEvent>) {
+type DisplayEventSnapshot = Snapshot<DisplayEvent>;
+
+const computeDisplayEventKey = (_index: number, item: DisplayEventSnapshot) =>
+  `${item.event.sequence}-${item.event.timestampMs}`;
+
+function renderDisplayEvent(display: DisplayEventSnapshot) {
   const { event, subtype, aggregated } = display;
   const color = colorForAction(event.actionType);
   const subtypeColor = subtype ? colorForAction(subtype) : null;
@@ -121,7 +127,13 @@ export default function App() {
             </p>
           </div>
         ) : (
-          displayEvents.map(renderDisplayEvent)
+          <Virtuoso<DisplayEventSnapshot>
+            data={displayEvents as DisplayEventSnapshot[]}
+            className="timeline-virtuoso"
+            computeItemKey={computeDisplayEventKey}
+            itemContent={(_index, display) => renderDisplayEvent(display)}
+            overscan={200}
+          />
         )}
       </main>
     </div>
