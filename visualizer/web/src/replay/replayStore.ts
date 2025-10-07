@@ -2,6 +2,7 @@ import { aggregateDisplayEvents } from "../eventAggregator";
 import { getVisualizerStore, visualizerStore, createInitialReplayState } from "../visualizerStore";
 import { colorForAction } from "../theme";
 import { eventSubtype, eventId, isDeltaEvent } from "../visualizerSketch/eventDetails";
+import { TRAVEL_DURATION } from "../visualizerSketch/launcher";
 import {
   ReplayCircle,
   ReplayEvent,
@@ -12,8 +13,19 @@ import {
 
 const EPSILON = 1e-3;
 
+function nowSeconds(): number {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now() / 1000;
+  }
+  return Date.now() / 1000;
+}
+
 function sortEvents(events: VisualizerEvent[]): VisualizerEvent[] {
   return [...events].sort((a, b) => a.sequence - b.sequence);
+}
+
+function replayTotalDuration(replay: ReplayState): number {
+  return replay.duration + TRAVEL_DURATION;
 }
 
 function makeMatchKey(event: VisualizerEvent): string {
@@ -162,6 +174,7 @@ export function beginReplay(): boolean {
   replay.pendingLive = 0;
   replay.pendingFrame = { timestamp: 0, events: [], reset: true } satisfies ReplayFrameUpdate;
   replay.circles = circles;
+  replay.lastTick = null;
   return true;
 }
 
@@ -179,6 +192,7 @@ export function playReplay() {
     return;
   }
   replay.status = "playing";
+  replay.lastTick = nowSeconds();
 }
 
 export function pauseReplay() {
@@ -187,6 +201,7 @@ export function pauseReplay() {
     return;
   }
   replay.status = "paused";
+  replay.lastTick = null;
 }
 
 export function restartReplay(): ReplayFrameUpdate {
@@ -199,6 +214,7 @@ export function restartReplay(): ReplayFrameUpdate {
   replay.status = replay.buffer.length > 0 ? replay.status : "paused";
   const frame: ReplayFrameUpdate = { timestamp: 0, events: [], reset: true };
   replay.pendingFrame = frame;
+  replay.lastTick = nowSeconds();
   return frame;
 }
 
@@ -233,7 +249,7 @@ export function seekReplayToTime(timeSeconds: number): ReplayFrameUpdate {
   }
   const previousCursor = replay.cursor;
   const previousTime = replay.currentTime;
-  const clamped = Math.max(0, Math.min(timeSeconds, replay.duration));
+  const clamped = Math.max(0, Math.min(timeSeconds, replayTotalDuration(replay)));
   const targetIndex = findTargetIndex(replay, clamped);
   const rewinding =
     targetIndex < previousCursor || clamped + EPSILON < previousTime;
@@ -249,6 +265,7 @@ export function seekReplayToTime(timeSeconds: number): ReplayFrameUpdate {
 
   replay.cursor = targetIndex;
   replay.currentTime = clamped;
+  replay.lastTick = nowSeconds();
 
   const frame: ReplayFrameUpdate = {
     timestamp: clamped,
@@ -289,15 +306,27 @@ export function stepReplay(step: number): ReplayFrameUpdate {
   return seekReplayToIndex(nextIndex);
 }
 
-export function advanceReplay(deltaSeconds: number): ReplayFrameUpdate {
+export function advanceReplay(): ReplayFrameUpdate {
   const replay = visualizerStore.replay;
   if (replay.mode !== "replay" || replay.status !== "playing") {
+    replay.lastTick = null;
     return { timestamp: replay.currentTime, events: [], reset: false };
   }
-  const nextTime = replay.currentTime + deltaSeconds * replay.speed;
+  const now = nowSeconds();
+  if (replay.lastTick === null) {
+    replay.lastTick = now;
+    return { timestamp: replay.currentTime, events: [], reset: false };
+  }
+  const deltaSeconds = (now - replay.lastTick) * replay.speed;
+  replay.lastTick = now;
+  if (deltaSeconds <= 0) {
+    return { timestamp: replay.currentTime, events: [], reset: false };
+  }
+  const nextTime = replay.currentTime + deltaSeconds;
   const frame = seekReplayToTime(nextTime);
-  if (frame.timestamp >= replay.duration) {
+  if (frame.timestamp >= replayTotalDuration(replay) - EPSILON) {
     replay.status = "paused";
+    replay.lastTick = null;
   }
   replay.pendingFrame = frame;
   return frame;
@@ -305,7 +334,7 @@ export function advanceReplay(deltaSeconds: number): ReplayFrameUpdate {
 
 export function getReplayProgress(): { current: number; duration: number } {
   const replay = visualizerStore.replay;
-  return { current: replay.currentTime, duration: replay.duration };
+  return { current: replay.currentTime, duration: replayTotalDuration(replay) };
 }
 
 export function consumePendingReplayFrame(): ReplayFrameUpdate | null {

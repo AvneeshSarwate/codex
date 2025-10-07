@@ -8,7 +8,7 @@ const BASE_RADIUS = 0.04;
 const MAX_RADIUS = 0.12;
 const GROWTH_PER_DELTA = 0.75;
 const PASSIVE_GROWTH_PER_SECOND = 0.35;
-const TRAVEL_DURATION = 1;
+export const TRAVEL_DURATION = 1;
 const EPSILON = 1e-6;
 
 export type CircleSnapshot = {

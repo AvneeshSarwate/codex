@@ -31,6 +31,7 @@ export function createInitialReplayState(): ReplayState {
     pendingLive: 0,
     pendingFrame: null,
     circles: [],
+    lastTick: null,
   } satisfies ReplayState;
 }
 

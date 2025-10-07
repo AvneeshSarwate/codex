@@ -72,6 +72,7 @@ export type ReplayState = {
   pendingLive: number;
   pendingFrame: ReplayFrameUpdate | null;
   circles: ReplayCircle[];
+  lastTick: number | null;
 };
 
 export type ConnectionStatus =

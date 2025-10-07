@@ -74,7 +74,6 @@ export function createVisualizerSketch(launcher: Launcher) {
 
     p.draw = () => {
       const nowSeconds = p.millis() / 1000;
-      const deltaSeconds = p.deltaTime / 1000;
       const replayMode = isReplayMode();
 
       if (!replayMode && lastMode === "replay") {
@@ -93,7 +92,7 @@ export function createVisualizerSketch(launcher: Launcher) {
       }
 
       if (replayStatus() === "playing") {
-        advanceReplay(deltaSeconds);
+        advanceReplay();
       }
 
       const replayState = getVisualizerState().replay;

@@ -10,6 +10,7 @@ import {
   stepReplay,
 } from "./replayStore";
 import { useReplayState } from "./hooks";
+import { TRAVEL_DURATION } from "../visualizerSketch/launcher";
 
 function formatTime(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
@@ -31,7 +32,8 @@ export function ReplayControls({ eventCount }: ReplayControlsProps) {
   const replay = useReplayState();
   const hasEvents = eventCount > 0;
 
-  const durationLabel = useMemo(() => formatTime(replay.duration), [replay.duration]);
+  const totalDuration = replay.duration + TRAVEL_DURATION;
+  const durationLabel = useMemo(() => formatTime(totalDuration), [totalDuration]);
   const currentLabel = useMemo(() => formatTime(replay.currentTime), [replay.currentTime]);
 
   const canEnterReplay = hasEvents && replay.mode === "live";
@@ -82,7 +84,7 @@ export function ReplayControls({ eventCount }: ReplayControlsProps) {
     }
   };
 
-  const sliderMax = replay.duration > 0 ? replay.duration : 1;
+  const sliderMax = totalDuration > 0 ? totalDuration : 1;
 
   if (replay.mode === "live") {
     return (
