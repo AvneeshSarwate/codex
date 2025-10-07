@@ -254,10 +254,19 @@ export function appendDisplayEvent(
 }
 
 export function aggregateDisplayEvents(events: VisualizerEvent[]): DisplayEvent[] {
+  return aggregateDisplayEventsWithIndex(events).displayEvents;
+}
+
+export function aggregateDisplayEventsWithIndex(
+  events: VisualizerEvent[]
+): { displayEvents: DisplayEvent[]; sequenceIndex: Map<number, number> } {
   const state = createAggregatorState();
   const displayEvents: DisplayEvent[] = [];
   rebuildDisplayEvents(events, displayEvents, state);
-  return displayEvents;
+  return {
+    displayEvents,
+    sequenceIndex: new Map(state.sequenceIndex),
+  };
 }
 
 export function lookupSequenceIndex(

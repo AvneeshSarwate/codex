@@ -18,6 +18,27 @@ const MAX_EVENTS = 50000;
 
 const aggregatorState = createAggregatorState();
 
+function cloneVisualizerEvent(event: VisualizerEvent): VisualizerEvent {
+  return { ...event };
+}
+
+function cloneDisplayEvent(entry: DisplayEvent): DisplayEvent {
+  return {
+    event: cloneVisualizerEvent(entry.event),
+    subtype: entry.subtype,
+    aggregated: entry.aggregated
+      ? {
+          subtype: entry.aggregated.subtype,
+          combinedText: entry.aggregated.combinedText,
+          events: entry.aggregated.events.map(cloneVisualizerEvent),
+        }
+      : undefined,
+    aggregatedSegments: entry.aggregatedSegments?.map((segment) => ({ ...segment })),
+    sequences: [...entry.sequences],
+    actionJson: entry.actionJson,
+  } satisfies DisplayEvent;
+}
+
 export function createInitialReplayState(): ReplayState {
   return {
     mode: "live",
@@ -29,6 +50,9 @@ export function createInitialReplayState(): ReplayState {
     baseTimestampMs: null,
     buffer: [],
     displayEvents: [],
+    sequenceIndex: {},
+    bufferIndex: {},
+    displayCursor: -1,
     pendingLive: 0,
     pendingFrame: null,
     circles: [],
@@ -121,4 +145,16 @@ export const VISUALIZER_MAX_EVENTS = MAX_EVENTS;
 
 export function getDisplayIndexForSequence(sequence: number): number | undefined {
   return lookupSequenceIndex(aggregatorState, sequence);
+}
+
+export function snapshotDisplayEvents(): {
+  displayEvents: DisplayEvent[];
+  sequenceIndex: Record<number, number>;
+} {
+  const cloned = visualizerStore.displayEvents.map(cloneDisplayEvent);
+  const sequenceIndex: Record<number, number> = {};
+  aggregatorState.sequenceIndex.forEach((index, sequence) => {
+    sequenceIndex[sequence] = index;
+  });
+  return { displayEvents: cloned, sequenceIndex };
 }

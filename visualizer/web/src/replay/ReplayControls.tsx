@@ -7,7 +7,7 @@ import {
   restartReplay,
   seekReplayToTime,
   setReplaySpeed,
-  stepReplay,
+  stepReplayByDisplay,
 } from "./replayStore";
 import { useReplayState } from "./hooks";
 import { TRAVEL_DURATION } from "../visualizerSketch/launcher";
@@ -61,12 +61,12 @@ export function ReplayControls({ eventCount }: ReplayControlsProps) {
 
   const handleStepBack = () => {
     pauseReplay();
-    stepReplay(-1);
+    stepReplayByDisplay(-1);
   };
 
   const handleStepForward = () => {
     pauseReplay();
-    stepReplay(1);
+    stepReplayByDisplay(1);
   };
 
   const handleSpeedChange = (event: ChangeEvent<HTMLSelectElement>) => {

@@ -81,6 +81,9 @@ export type ReplayState = {
   baseTimestampMs: number | null;
   buffer: ReplayEvent[];
   displayEvents: DisplayEvent[];
+  sequenceIndex: Record<number, number>;
+  bufferIndex: Record<number, number>;
+  displayCursor: number;
   pendingLive: number;
   pendingFrame: ReplayFrameUpdate | null;
   circles: ReplayCircle[];

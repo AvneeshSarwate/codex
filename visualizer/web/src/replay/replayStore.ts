@@ -1,10 +1,10 @@
-import { aggregateDisplayEvents } from "../eventAggregator";
-import { getVisualizerStore, visualizerStore, createInitialReplayState } from "../visualizerStore";
+import { getVisualizerStore, visualizerStore, createInitialReplayState, snapshotDisplayEvents } from "../visualizerStore";
 import { colorForAction } from "../theme";
 import { eventSubtype, isDeltaEvent } from "../visualizerSketch/eventDetails";
 import { buildEventMatchKey } from "../visualizerSketch/circleKeys";
 import { TRAVEL_DURATION } from "../visualizerSketch/launcher";
 import {
+  DisplayEvent,
   ReplayCircle,
   ReplayEvent,
   ReplayFrameUpdate,
@@ -13,6 +13,7 @@ import {
 } from "../visualizerTypes";
 
 const EPSILON = 1e-3;
+const EPSILON_MS = 1;
 
 function nowSeconds(): number {
   if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -154,6 +155,57 @@ function resetReplayState(target: ReplayState) {
   Object.assign(target, createInitialReplayState());
 }
 
+function displayEventTimestampMs(display: DisplayEvent): number {
+  const segments = display.aggregated?.events;
+  if (segments && segments.length > 0) {
+    const last = segments[segments.length - 1];
+    if (last) {
+      return last.timestampMs;
+    }
+  }
+  return display.event.timestampMs;
+}
+
+function displayIndexForSequence(replay: ReplayState, sequence: number | undefined): number {
+  if (sequence === undefined) {
+    return -1;
+  }
+  const index = replay.sequenceIndex[sequence];
+  return typeof index === "number" ? index : -1;
+}
+
+function displayIndexForTime(replay: ReplayState, timeSeconds: number): number {
+  if (replay.displayEvents.length === 0 || replay.baseTimestampMs === null) {
+    return -1;
+  }
+  const targetTimestamp = replay.baseTimestampMs + timeSeconds * 1000;
+  let index = -1;
+  for (let i = 0; i < replay.displayEvents.length; i += 1) {
+    const display = replay.displayEvents[i];
+    if (displayEventTimestampMs(display) <= targetTimestamp + EPSILON_MS) {
+      index = i;
+    } else {
+      break;
+    }
+  }
+  return index;
+}
+
+function syncDisplayCursorFromBuffer(replay: ReplayState) {
+  if (replay.cursor < 0) {
+    replay.displayCursor = -1;
+    return;
+  }
+  const sequence = replay.buffer[replay.cursor]?.sequence;
+  const bySequence = displayIndexForSequence(replay, sequence);
+  if (bySequence !== -1) {
+    replay.displayCursor = bySequence;
+    return;
+  }
+  const byTime = displayIndexForTime(replay, replay.currentTime);
+  replay.displayCursor = byTime;
+}
+
 export function beginReplay(): boolean {
   const store = getVisualizerStore();
   const existing = store.replay;
@@ -167,7 +219,7 @@ export function beginReplay(): boolean {
   }
 
   const buffer = buildReplayBuffer(events);
-  const displayEvents = aggregateDisplayEvents(events);
+  const { displayEvents, sequenceIndex } = snapshotDisplayEvents();
   const circles = buildReplayCircles(buffer);
   const duration = buffer[buffer.length - 1]?.relativeTime ?? 0;
   const replay = store.replay;
@@ -180,6 +232,12 @@ export function beginReplay(): boolean {
   replay.baseTimestampMs = buffer[0]?.timestampMs ?? null;
   replay.buffer = buffer;
   replay.displayEvents = displayEvents;
+  replay.sequenceIndex = sequenceIndex;
+  replay.bufferIndex = buffer.reduce<Record<number, number>>((map, event, index) => {
+    map[event.sequence] = index;
+    return map;
+  }, {});
+  replay.displayCursor = -1;
   replay.pendingLive = 0;
   replay.pendingFrame = { timestamp: 0, events: [], reset: true } satisfies ReplayFrameUpdate;
   replay.circles = circles;
@@ -224,6 +282,7 @@ export function restartReplay(): ReplayFrameUpdate {
   const frame: ReplayFrameUpdate = { timestamp: 0, events: [], reset: true };
   replay.pendingFrame = frame;
   replay.lastTick = nowSeconds();
+  replay.displayCursor = -1;
   return frame;
 }
 
@@ -275,6 +334,7 @@ export function seekReplayToTime(timeSeconds: number): ReplayFrameUpdate {
   replay.cursor = targetIndex;
   replay.currentTime = clamped;
   replay.lastTick = nowSeconds();
+  syncDisplayCursorFromBuffer(replay);
 
   const frame: ReplayFrameUpdate = {
     timestamp: clamped,
@@ -294,13 +354,16 @@ export function seekReplayToIndex(index: number): ReplayFrameUpdate {
   if (replay.buffer.length === 0) {
     replay.cursor = -1;
     replay.currentTime = 0;
+    replay.displayCursor = -1;
     const frame: ReplayFrameUpdate = { timestamp: 0, events: [], reset: true };
     replay.pendingFrame = frame;
     return frame;
   }
   const clampedIndex = Math.max(-1, Math.min(index, replay.buffer.length - 1));
   if (clampedIndex === -1) {
-    return seekReplayToTime(0);
+    const frame = seekReplayToTime(0);
+    replay.displayCursor = -1;
+    return frame;
   }
   const targetTime = replay.buffer[clampedIndex].relativeTime;
   return seekReplayToTime(targetTime);
@@ -313,6 +376,67 @@ export function stepReplay(step: number): ReplayFrameUpdate {
   }
   const nextIndex = Math.max(-1, Math.min(replay.cursor + step, replay.buffer.length - 1));
   return seekReplayToIndex(nextIndex);
+}
+
+function bufferIndexForDisplay(replay: ReplayState, displayIndex: number): number | undefined {
+  if (displayIndex < 0 || displayIndex >= replay.displayEvents.length) {
+    return undefined;
+  }
+  const displayEvent = replay.displayEvents[displayIndex];
+  const sequences = displayEvent.sequences.length > 0 ? displayEvent.sequences : [displayEvent.event.sequence];
+  let best: number | undefined;
+  for (const sequence of sequences) {
+    const candidate = replay.bufferIndex[sequence];
+    if (typeof candidate === "number") {
+      if (best === undefined || candidate < best) {
+        best = candidate;
+      }
+    }
+  }
+  if (best !== undefined) {
+    return best;
+  }
+  const fallback = replay.bufferIndex[displayEvent.event.sequence];
+  return typeof fallback === "number" ? fallback : undefined;
+}
+
+export function stepReplayByDisplay(offset: number): ReplayFrameUpdate {
+  const replay = visualizerStore.replay;
+  if (replay.mode !== "replay" || replay.displayEvents.length === 0) {
+    return { timestamp: replay.currentTime, events: [], reset: false };
+  }
+
+  const currentDisplayIndex = replay.displayCursor;
+
+  if (currentDisplayIndex === -1 && offset <= 0) {
+    const frame = seekReplayToIndex(-1);
+    replay.displayCursor = -1;
+    return frame;
+  }
+
+  let targetDisplayIndex = currentDisplayIndex === -1 ? 0 : currentDisplayIndex + offset;
+  if (targetDisplayIndex < 0) {
+    const frame = seekReplayToIndex(-1);
+    replay.displayCursor = -1;
+    return frame;
+  }
+  if (targetDisplayIndex >= replay.displayEvents.length) {
+    targetDisplayIndex = replay.displayEvents.length - 1;
+  }
+
+  const targetBufferIndex = bufferIndexForDisplay(replay, targetDisplayIndex);
+  let frame: ReplayFrameUpdate;
+  if (typeof targetBufferIndex === "number") {
+    frame = seekReplayToIndex(targetBufferIndex);
+  } else {
+    const targetEvent = replay.displayEvents[targetDisplayIndex];
+    const fallbackTime = replay.baseTimestampMs !== null
+      ? (displayEventTimestampMs(targetEvent) - replay.baseTimestampMs) / 1000
+      : replay.currentTime;
+    frame = seekReplayToTime(fallbackTime);
+  }
+  replay.displayCursor = targetDisplayIndex;
+  return frame;
 }
 
 export function advanceReplay(): ReplayFrameUpdate {

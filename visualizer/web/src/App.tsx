@@ -42,6 +42,17 @@ export default function App() {
 
   const followOutput = replay.mode === "live" ? "auto" : false;
 
+  const resolveDisplayIndex = useCallback(
+    (sequence: number): number | undefined => {
+      if (replay.mode === "replay") {
+        const index = replay.sequenceIndex[sequence];
+        return typeof index === "number" ? index : undefined;
+      }
+      return getDisplayIndexForSequence(sequence);
+    },
+    [replay.mode, replay.sequenceIndex]
+  );
+
   const activeReplayIndex = useMemo(() => {
     if (replay.mode !== "replay") {
       return null;
@@ -56,9 +67,9 @@ export default function App() {
     if (!targetEvent) {
       return displayEvents.length - 1;
     }
-    const mapped = getDisplayIndexForSequence(targetEvent.sequence);
+    const mapped = resolveDisplayIndex(targetEvent.sequence);
     return mapped ?? displayEvents.length - 1;
-  }, [displayEvents.length, replay.buffer, replay.cursor, replay.mode]);
+  }, [displayEvents.length, replay.buffer, replay.cursor, replay.mode, resolveDisplayIndex]);
 
   useEffect(() => {
     const previousMode = previousModeRef.current;
@@ -120,16 +131,37 @@ export default function App() {
     if (!selectedEvent) {
       return;
     }
-    const hasTimeline = getDisplayIndexForSequence(selectedEvent.timelineSequence) !== undefined;
-    const hasSource = getDisplayIndexForSequence(selectedEvent.sourceSequence) !== undefined;
+    const hasTimeline = resolveDisplayIndex(selectedEvent.timelineSequence) !== undefined;
+    const hasSource = resolveDisplayIndex(selectedEvent.sourceSequence) !== undefined;
     if (!hasTimeline && !hasSource) {
       setSelectedEvent(null);
     }
-  }, [displayEvents, selectedEvent]);
+  }, [displayEvents, resolveDisplayIndex, selectedEvent]);
+
+  useEffect(() => {
+    if (replay.mode !== "replay") {
+      return;
+    }
+    const index = replay.displayCursor;
+    if (index < 0 || index >= displayEvents.length) {
+      setSelectedEvent(null);
+      return;
+    }
+    const display = displayEvents[index];
+    setSelectedEvent((prev) => {
+      if (prev && prev.timelineSequence === display.event.sequence) {
+        return prev;
+      }
+      return {
+        sourceSequence: display.event.sequence,
+        timelineSequence: display.event.sequence,
+      } satisfies SelectedEventState;
+    });
+  }, [displayEvents, replay.displayCursor, replay.mode]);
 
   const highlightSequences = useMemo(() => {
     if (selectedEvent) {
-      const displayIndex = getDisplayIndexForSequence(selectedEvent.timelineSequence);
+      const displayIndex = resolveDisplayIndex(selectedEvent.timelineSequence);
       const display = displayIndex !== undefined ? displayEvents[displayIndex] : undefined;
       if (display) {
         return new Set(display.sequences);
@@ -137,19 +169,19 @@ export default function App() {
       return new Set([selectedEvent.sourceSequence, selectedEvent.timelineSequence]);
     }
     if (activeSequence !== null) {
-      const displayIndex = getDisplayIndexForSequence(activeSequence);
+      const displayIndex = resolveDisplayIndex(activeSequence);
       const display = displayIndex !== undefined ? displayEvents[displayIndex] : undefined;
       if (display) {
         return new Set(display.sequences);
       }
     }
     return new Set<number>();
-  }, [activeSequence, displayEvents, selectedEvent]);
+  }, [activeSequence, displayEvents, resolveDisplayIndex, selectedEvent]);
 
   const handleCircleSelect = useCallback(
     (selection: CircleSelection) => {
-      const primaryIndex = getDisplayIndexForSequence(selection.latestSequence);
-      const fallbackIndex = getDisplayIndexForSequence(selection.primarySequence);
+      const primaryIndex = resolveDisplayIndex(selection.latestSequence);
+      const fallbackIndex = resolveDisplayIndex(selection.primarySequence);
       const index = primaryIndex ?? fallbackIndex;
       if (index === undefined) {
         return;
@@ -164,7 +196,7 @@ export default function App() {
       });
       virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "smooth" });
     },
-    [displayEvents]
+    [displayEvents, resolveDisplayIndex]
   );
 
   const renderDisplayEvent = (display: DisplayEventSnapshot) => {

@@ -6,18 +6,26 @@ This React application renders a live/replay view of events emitted by the Codex
 
 1. **WebSocket Ingestion** (`visualizerClient.ts`)
    - Connects to the websocket server (`CODEX_VISUALIZER_WS`).
-   - Handles `backlog` messages by replacing the event store, and `event` messages by appending a new item.
+   - Handles `backlog` messages by replacing the event store, and `event` messages by queueing them for the next animation frame before pushing into state (reduces React/Valtio churn during large bursts).
    - Maintains connection status and exposes a hook (`useVisualizerData`) that derives mode-aware display events.
 
 2. **State Store** (`visualizerStore.ts`)
    - Valtio proxy holds live events, aggregated display events, and replay metadata (`ReplayState`).
-   - Aggregation utilities (`eventAggregator.ts`) merge delta events into grouped `DisplayEvent`s, keeping both raw events and textual summaries.
+   - Aggregation utilities (`eventAggregator.ts`) mutate existing `DisplayEvent`s in place: delta bursts update a cached sequence index, combined text, precomputed JSON, and sequence list instead of rebuilding arrays each frame.
    - `onDisplayEvent` allows consumers to subscribe to append-only updates while live.
+
+## Incremental Updates
+
+- Delta aggregation avoids O(n²) copies by keeping a persistent `DisplayEvent` per protocol message and appending new segments into cached metadata (`actionJson`, `sequences`, `aggregatedSegments`).
+- A sequence→display index map lives alongside the store so replay, selection, and the sketch can jump directly to the correct row without recomputing lookup tables in React renders.
+- WebSocket events are buffered with `requestAnimationFrame`; UI state only mutates once per frame, which lets the browser drain large bursts of deltas without blocking rendering.
+- Replay navigation (`step ±1`) now walks the aggregated timeline rather than raw protocol deltas, using the precomputed sequence maps.
 
 3. **Replay Engine** (`replay/replayStore.ts`)
    - Builds a replay buffer from the live events, producing:
      - `ReplayEvent` array (sorted with relative timestamps).
      - `ReplayCircle` descriptors capturing charging start, launch time, colors, and stack order for each circle.
+   - Snapshots the current display aggregation so entering replay reuses the already-computed timeline instead of re-aggregating the entire backlog.
    - Exposes control actions (`begin`, `play`, `pause`, `seek`, `step`, `restart`, `exit`) that operate entirely on the store.
    - Tracks `lastTick` so that `advanceReplay()` can apply real-time deltas using `performance.now()`.
    - Adds a fixed travel buffer (`TRAVEL_DURATION`) to replay duration so the final launch completes before playback stops.
