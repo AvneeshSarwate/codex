@@ -400,6 +400,36 @@ function bufferIndexForDisplay(replay: ReplayState, displayIndex: number): numbe
   return typeof fallback === "number" ? fallback : undefined;
 }
 
+function seekReplayToDisplayIndexInternal(
+  replay: ReplayState,
+  displayIndex: number
+): ReplayFrameUpdate {
+  const targetBufferIndex = bufferIndexForDisplay(replay, displayIndex);
+  let frame: ReplayFrameUpdate;
+  if (typeof targetBufferIndex === "number") {
+    frame = seekReplayToIndex(targetBufferIndex);
+  } else {
+    const targetEvent = replay.displayEvents[displayIndex];
+    const fallbackTime = replay.baseTimestampMs !== null
+      ? (displayEventTimestampMs(targetEvent) - replay.baseTimestampMs) / 1000
+      : replay.currentTime;
+    frame = seekReplayToTime(fallbackTime);
+  }
+  replay.displayCursor = displayIndex;
+  return frame;
+}
+
+export function seekReplayToDisplayIndex(displayIndex: number): ReplayFrameUpdate {
+  const replay = visualizerStore.replay;
+  if (replay.mode !== "replay") {
+    return { timestamp: 0, events: [], reset: false };
+  }
+  if (displayIndex < 0 || displayIndex >= replay.displayEvents.length) {
+    return { timestamp: replay.currentTime, events: [], reset: false };
+  }
+  return seekReplayToDisplayIndexInternal(replay, displayIndex);
+}
+
 export function stepReplayByDisplay(offset: number): ReplayFrameUpdate {
   const replay = visualizerStore.replay;
   if (replay.mode !== "replay" || replay.displayEvents.length === 0) {
@@ -424,19 +454,7 @@ export function stepReplayByDisplay(offset: number): ReplayFrameUpdate {
     targetDisplayIndex = replay.displayEvents.length - 1;
   }
 
-  const targetBufferIndex = bufferIndexForDisplay(replay, targetDisplayIndex);
-  let frame: ReplayFrameUpdate;
-  if (typeof targetBufferIndex === "number") {
-    frame = seekReplayToIndex(targetBufferIndex);
-  } else {
-    const targetEvent = replay.displayEvents[targetDisplayIndex];
-    const fallbackTime = replay.baseTimestampMs !== null
-      ? (displayEventTimestampMs(targetEvent) - replay.baseTimestampMs) / 1000
-      : replay.currentTime;
-    frame = seekReplayToTime(fallbackTime);
-  }
-  replay.displayCursor = targetDisplayIndex;
-  return frame;
+  return seekReplayToDisplayIndexInternal(replay, targetDisplayIndex);
 }
 
 export function advanceReplay(): ReplayFrameUpdate {

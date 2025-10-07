@@ -8,6 +8,7 @@ import { DisplayEvent } from "./visualizerTypes";
 import { getDisplayIndexForSequence } from "./visualizerStore";
 import { VisualizerSketch } from "./VisualizerSketch";
 import { ReplayControls } from "./replay/ReplayControls";
+import { seekReplayToDisplayIndex } from "./replay/replayStore";
 import { CircleSelection } from "./visualizerSketch/konvaManager";
 
 function formatTimestamp(timestampMs: number) {
@@ -211,6 +212,9 @@ export default function App() {
     const accentStyle = { "--accent-color": color } as CSSProperties;
     const badgeStyle = subtypeColor ? ({ backgroundColor: subtypeColor } as CSSProperties) : undefined;
     const actionJson = <pre className="event-json">{display.actionJson}</pre>;
+    const sequences = display.sequences.length > 0 ? display.sequences : [event.sequence];
+    const timelineSequence = sequences[sequences.length - 1] ?? event.sequence;
+    const showInTimelineDisabled = replay.mode !== "replay";
 
     const isActive =
       activeSequence !== null &&
@@ -227,6 +231,26 @@ export default function App() {
               timelineSequence: event.sequence,
             }
       );
+    };
+
+    const handleShowInTimeline = () => {
+      setSelectedEvent({
+        sourceSequence: timelineSequence,
+        timelineSequence,
+      });
+
+      if (replay.mode !== "replay") {
+        return;
+      }
+
+      const candidateSequences = [...new Set([timelineSequence, event.sequence, ...sequences])];
+      for (const sequence of candidateSequences) {
+        const index = resolveDisplayIndex(sequence);
+        if (typeof index === "number") {
+          seekReplayToDisplayIndex(index);
+          return;
+        }
+      }
     };
 
     return (
@@ -248,13 +272,24 @@ export default function App() {
                 </>
               ) : null}
             </span>
-            <span className="event-summary-sequence">#{event.sequence}</span>
+            <span >
+              <button
+                className="event-show-timeline"
+                type="button"
+                onClick={handleShowInTimeline}
+                disabled={showInTimelineDisabled}
+                style={{ marginRight: "0.5rem" }}
+              >
+                Show in timeline
+              </button>
+              <span className="event-summary-sequence">#{event.sequence}</span>
+            </span>
           </div>
           <div className="event-summary-meta event-meta">
             <span>{formatTimestamp(event.timestampMs)}</span>
             {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
           </div>
-        </button>
+        </button>  
         <details className="event-details">
           <summary className="event-details-summary">View details</summary>
           <div className="event-content">
