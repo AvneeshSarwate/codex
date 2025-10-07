@@ -1,4 +1,4 @@
-export const stateBackground = "#f8fafc";
+export const stateBackground = "#faf9f5";
 export const actionBackground = "#ffffff";
 
 export function colorForAction(actionType: string): string {
@@ -9,8 +9,8 @@ export function colorForAction(actionType: string): string {
   }
 
   const hue = Math.abs(hash) % 360;
-  const saturation = 60 + (Math.abs(hash) % 20);
-  const lightness = 45 + (Math.abs(hash) % 10);
+  const saturation = 45 + (Math.abs(hash) % 15);
+  const lightness = 55 + (Math.abs(hash) % 12);
 
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
