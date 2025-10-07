@@ -204,6 +204,10 @@ body {
   transition: box-shadow 0.2s ease;
 }
 
+.event-item-active {
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18), 0 0 0 2px var(--accent-color, #1f2937);
+}
+
 .event-item[open] {
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
 }
@@ -237,6 +241,10 @@ body {
 
 .event-item[open] .event-summary::before {
   transform: translateY(-50%) rotate(225deg);
+}
+
+.event-item-active .event-summary {
+  background: rgba(148, 163, 184, 0.12);
 }
 
 .event-summary-main {

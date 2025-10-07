@@ -29,7 +29,7 @@ This React application renders a live/replay view of events emitted by the Codex
    - `Launcher` retains forward-processing logic for live updates and provides shared constants (e.g. `TRAVEL_DURATION`).
 
 5. **UI Components**
-   - `App.tsx` renders the header, sketch, `ReplayControls`, and the timeline list using `react-virtuoso` for virtualized scrolling.
+   - `App.tsx` renders the header, sketch, `ReplayControls`, and the timeline list using `react-virtuoso` for virtualized scrolling, auto-following new events while live and syncing replay scrubbing with the list position.
    - `ReplayControls.tsx` reflects replay state, exposes play/pause/seek/step actions, and renders a slider whose range equals `duration + TRAVEL_DURATION`.
    - Timeline items use colors from `theme.ts` and display aggregated JSON payloads.
 
