@@ -13,6 +13,7 @@
   --color-clay: #d97757;
   --shadow-soft: 0 6px 18px rgba(20, 20, 19, 0.06);
   --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.2);
+  --grey-border-thickness: 2px;
   color: var(--color-slate-dark);
   font-family: var(--font-serif);
   background-color: var(--color-ivory-light);
@@ -60,7 +61,7 @@ select,
 .header {
   padding: 1.25rem 2rem;
   background: var(--color-ivory-light);
-  border-bottom: 1px solid var(--color-ivory-dark);
+  border-bottom: var(--grey-border-thickness) solid var(--color-ivory-dark);
   color: var(--color-slate-dark);
   display: flex;
   justify-content: space-between;
@@ -113,7 +114,7 @@ select,
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  border: 1px solid var(--color-ivory-dark);
+  border: var(--grey-border-thickness) solid var(--color-ivory-dark);
 }
 
 .replay-controls.replay-active {
@@ -268,8 +269,8 @@ select,
 }
 
 .event-item {
-  border: 1px solid var(--color-ivory-dark);
-  border-left: 3px solid var(--accent-color, var(--color-slate-medium));
+  border: var(--grey-border-thickness) solid var(--color-ivory-dark);
+  border-left: 5px solid var(--accent-color, var(--color-slate-medium));
   border-radius: 0.5rem;
   background: var(--color-ivory-light);
   box-shadow: none;
