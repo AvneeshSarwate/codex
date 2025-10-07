@@ -1,6 +1,7 @@
 import { colorForAction } from "../theme";
 import { VisualizerEvent, ReplayCircle } from "../visualizerTypes";
-import { eventId, eventSubtype, isDeltaEvent } from "./eventDetails";
+import { eventSubtype, isDeltaEvent } from "./eventDetails";
+import { buildEventMatchKey } from "./circleKeys";
 
 const BASE_Y = 2 / 3;
 const STACK_SPACING = 0.08;
@@ -19,6 +20,9 @@ export type CircleSnapshot = {
   fill: string;
   stroke: string;
   state: "charging" | "flying";
+  matchKey: string;
+  primarySequence: number;
+  latestSequence: number;
 };
 
 type CircleState = "charging" | "flying";
@@ -38,16 +42,9 @@ type LaunchCircle = {
   createdAt: number;
   launchedAt: number | null;
   lastUpdate: number;
+  primarySequence: number;
+  latestSequence: number;
 };
-
-function makeMatchKey(event: VisualizerEvent): string {
-  const id = eventId(event);
-  if (id) {
-    return id;
-  }
-  const subtype = eventSubtype(event);
-  return `${event.actionType}::${subtype ?? ""}`;
-}
 
 function makeCircleId(event: VisualizerEvent): string {
   return `circle-${event.sequence}-${event.timestampMs}`;
@@ -75,7 +72,7 @@ export class Launcher {
 
     for (const event of events) {
       const subtype = eventSubtype(event);
-      const matchKey = makeMatchKey(event);
+      const matchKey = buildEventMatchKey(event);
       const primaryColor = colorForAction(event.actionType);
       const fillColor = pickFillColor(event.actionType, subtype);
       const now = timestamp;
@@ -98,6 +95,8 @@ export class Launcher {
             createdAt: now,
             launchedAt: null,
             lastUpdate: now,
+            primarySequence: event.sequence,
+            latestSequence: event.sequence,
           } satisfies LaunchCircle;
           this.charging.set(matchKey, circle);
           this.circles.push(circle);
@@ -107,6 +106,7 @@ export class Launcher {
         circle.subtype = subtype;
         circle.fill = fillColor;
         circle.stroke = primaryColor;
+        circle.latestSequence = Math.max(circle.latestSequence, event.sequence);
         continue;
       }
 
@@ -116,6 +116,7 @@ export class Launcher {
         pending.launchedAt = now;
         pending.lastUpdate = now;
         pending.x = 1;
+        pending.latestSequence = Math.max(pending.latestSequence, event.sequence);
         launchedThisFrame.push(pending);
         this.charging.delete(matchKey);
         continue;
@@ -136,6 +137,8 @@ export class Launcher {
         createdAt: now,
         launchedAt: now,
         lastUpdate: now,
+        primarySequence: event.sequence,
+        latestSequence: event.sequence,
       };
       this.circles.push(circle);
       launchedThisFrame.push(circle);
@@ -184,6 +187,9 @@ export class Launcher {
         fill: circle.fill,
         stroke: circle.stroke,
         state: circle.state,
+        matchKey: circle.matchKey,
+        primarySequence: circle.primarySequence,
+        latestSequence: circle.latestSequence,
       });
     }
 
@@ -227,6 +233,9 @@ export class Launcher {
           fill: circle.fill,
           stroke: circle.stroke,
           state: "flying",
+          matchKey: circle.matchKey,
+          primarySequence: circle.primarySequence,
+          latestSequence: circle.latestSequence,
         });
         continue;
       }
@@ -240,6 +249,9 @@ export class Launcher {
         fill: circle.fill,
         stroke: circle.stroke,
         state: "charging",
+        matchKey: circle.matchKey,
+        primarySequence: circle.primarySequence,
+        latestSequence: circle.latestSequence,
       });
     }
 

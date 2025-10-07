@@ -1,7 +1,8 @@
 import { aggregateDisplayEvents } from "../eventAggregator";
 import { getVisualizerStore, visualizerStore, createInitialReplayState } from "../visualizerStore";
 import { colorForAction } from "../theme";
-import { eventSubtype, eventId, isDeltaEvent } from "../visualizerSketch/eventDetails";
+import { eventSubtype, isDeltaEvent } from "../visualizerSketch/eventDetails";
+import { buildEventMatchKey } from "../visualizerSketch/circleKeys";
 import { TRAVEL_DURATION } from "../visualizerSketch/launcher";
 import {
   ReplayCircle,
@@ -28,15 +29,6 @@ function replayTotalDuration(replay: ReplayState): number {
   return replay.duration + TRAVEL_DURATION;
 }
 
-function makeMatchKey(event: VisualizerEvent): string {
-  const id = eventId(event);
-  if (id) {
-    return id;
-  }
-  const subtype = eventSubtype(event);
-  return `${event.actionType}::${subtype ?? ""}`;
-}
-
 type ActiveReplayCharge = {
   matchKey: string;
   chargingStart: number;
@@ -45,6 +37,7 @@ type ActiveReplayCharge = {
   subtype: string | null;
   actionType: string;
   startSequence: number;
+  latestSequence: number;
 };
 
 function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
@@ -54,7 +47,7 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
 
   for (const event of events) {
     const subtype = eventSubtype(event);
-    const matchKey = makeMatchKey(event);
+    const matchKey = buildEventMatchKey(event);
     const stroke = colorForAction(event.actionType);
     const fill = colorForAction(subtype ?? event.actionType);
     const time = event.relativeTime;
@@ -69,6 +62,7 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
           subtype,
           actionType: event.actionType,
           startSequence: event.sequence,
+          latestSequence: event.sequence,
         });
       } else {
         const entry = active.get(matchKey)!;
@@ -76,6 +70,7 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
         entry.stroke = stroke;
         entry.subtype = subtype;
         entry.actionType = event.actionType;
+        entry.latestSequence = Math.max(entry.latestSequence, event.sequence);
       }
       continue;
     }
@@ -95,6 +90,9 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
         chargingStart: entry.chargingStart,
         launchTime: time,
         stackIndex,
+        matchKey: entry.matchKey,
+        primarySequence: entry.startSequence,
+        latestSequence: Math.max(entry.latestSequence, event.sequence),
       });
       active.delete(matchKey);
     } else {
@@ -107,6 +105,9 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
         chargingStart: time,
         launchTime: time,
         stackIndex,
+        matchKey,
+        primarySequence: event.sequence,
+        latestSequence: event.sequence,
       });
     }
   }
@@ -123,6 +124,9 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
       chargingStart: entry.chargingStart,
       launchTime: null,
       stackIndex: index,
+      matchKey: entry.matchKey,
+      primarySequence: entry.startSequence,
+      latestSequence: entry.latestSequence,
     });
   });
 

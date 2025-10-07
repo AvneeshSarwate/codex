@@ -1,6 +1,6 @@
 # Visualizer Web Architecture
 
-This React application renders a live/replay view of events emitted by the Codex agent. It uses Vite for bundling, Valtio for state management, and p5.js for the animated header.
+This React application renders a live/replay view of events emitted by the Codex agent. It uses Vite for bundling, Valtio for state management, and a Konva-powered canvas for the animated header.
 
 ## Data Flow
 
@@ -23,13 +23,13 @@ This React application renders a live/replay view of events emitted by the Codex
    - Adds a fixed travel buffer (`TRAVEL_DURATION`) to replay duration so the final launch completes before playback stops.
 
 4. **Animation Layer**
-   - `VisualizerSketch.tsx` mounts a p5 instance.
-   - In live mode, new events flow directly into the `Launcher` state machine and animate frame-by-frame.
-   - In replay mode, the sketch ignores the incremental path and instead calls `Launcher.fromReplay()` with the precomputed `ReplayCircle` descriptors and the current replay time. This yields `CircleSnapshot`s that are purely a function of time, enabling instant scrubbing.
+   - `VisualizerSketch.tsx` mounts a `KonvaStageManager`, which owns the `Konva.Stage`/`Layer` instances and listens for selection updates.
+   - `animationController.ts` runs the main render loop (using `requestAnimationFrame`), pushing `CircleSnapshot`s from the shared `Launcher` state machine into the stage manager.
+   - In live mode, only fresh events are processed by `Launcher.processEvents`, keeping the stream incremental. In replay mode, the controller renders pure snapshots from `Launcher.fromReplay()` so scrubbing remains O(number of circles).
    - `Launcher` retains forward-processing logic for live updates and provides shared constants (e.g. `TRAVEL_DURATION`).
 
 5. **UI Components**
-   - `App.tsx` renders the header, sketch, `ReplayControls`, and the timeline list using `react-virtuoso` for virtualized scrolling, auto-following new events while live and syncing replay scrubbing with the list position.
+   - `App.tsx` renders the header, sketch, `ReplayControls`, and the timeline list using `react-virtuoso` for virtualized scrolling, auto-following new events while live and syncing replay scrubbing with the list position. It also coordinates selection/highlight state shared with the Konva stage.
    - `ReplayControls.tsx` reflects replay state, exposes play/pause/seek/step actions, and renders a slider whose range equals `duration + TRAVEL_DURATION`.
    - Timeline items use colors from `theme.ts` and display aggregated JSON payloads.
 
@@ -50,5 +50,5 @@ This React application renders a live/replay view of events emitted by the Codex
 - React + Vite for UI and bundling.
 - Valtio for observable state.
 - react-virtuoso for virtualized timeline rendering.
-- p5.js for canvas-based animation.
+- Konva for canvas-based animation.
 - TypeScript for static typing.

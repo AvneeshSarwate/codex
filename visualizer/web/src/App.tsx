@@ -1,5 +1,5 @@
 import type { Snapshot } from "valtio";
-import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
@@ -7,6 +7,8 @@ import { useVisualizerData } from "./visualizerClient";
 import { DisplayEvent } from "./visualizerTypes";
 import { VisualizerSketch } from "./VisualizerSketch";
 import { ReplayControls } from "./replay/ReplayControls";
+import { CircleSelection } from "./visualizerSketch/konvaManager";
+import { buildEventMatchKey } from "./visualizerSketch/circleKeys";
 
 function formatTimestamp(timestampMs: number) {
   const date = new Date(timestampMs);
@@ -31,7 +33,13 @@ export default function App() {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousModeRef = useRef(replay.mode);
   const prevLengthRef = useRef(-1);
-  const [selectedSequence, setSelectedSequence] = useState<number | null>(null);
+  type SelectedEventState = {
+    sourceSequence: number;
+    timelineSequence: number;
+    matchKeys: string[];
+  };
+
+  const [selectedEvent, setSelectedEvent] = useState<SelectedEventState | null>(null);
 
   const followOutput = replay.mode === "live" ? "auto" : false;
 
@@ -107,21 +115,81 @@ export default function App() {
   }, [activeReplayIndex, replay.mode, replay.status]);
 
   const activeSequence = useMemo(() => {
-    if (selectedSequence !== null) {
-      return selectedSequence;
+    if (selectedEvent) {
+      return selectedEvent.sourceSequence;
     }
     if (replay.mode !== "replay" || replay.cursor < 0) {
       return null;
     }
     const target = replay.buffer[replay.cursor];
     return target ? target.sequence : null;
-  }, [replay.buffer, replay.cursor, replay.mode, selectedSequence]);
+  }, [replay.buffer, replay.cursor, replay.mode, selectedEvent]);
 
   useEffect(() => {
     if (replay.mode === "live") {
-      setSelectedSequence(null);
+      setSelectedEvent(null);
     }
   }, [replay.mode]);
+
+  useEffect(() => {
+    if (!selectedEvent) {
+      return;
+    }
+    const hasTimeline = sequenceToDisplayIndex.has(selectedEvent.timelineSequence);
+    const hasSource = sequenceToDisplayIndex.has(selectedEvent.sourceSequence);
+    if (!hasTimeline && !hasSource) {
+      setSelectedEvent(null);
+    }
+  }, [selectedEvent, sequenceToDisplayIndex]);
+
+  const collectMatchKeys = useCallback((display: DisplayEventSnapshot): string[] => {
+    const keys = new Set<string>();
+    keys.add(buildEventMatchKey(display.event));
+    const aggregated = display.aggregated?.events;
+    if (aggregated) {
+      aggregated.forEach((segment) => {
+        keys.add(buildEventMatchKey(segment));
+      });
+    }
+    return [...keys];
+  }, []);
+
+  const highlightKeys = useMemo(() => {
+    if (selectedEvent) {
+      return new Set(selectedEvent.matchKeys);
+    }
+    if (activeSequence !== null) {
+      const displayIndex = sequenceToDisplayIndex.get(activeSequence);
+      const display = displayIndex !== undefined ? displayEvents[displayIndex] : undefined;
+      if (display) {
+        return new Set(collectMatchKeys(display));
+      }
+    }
+    return new Set<string>();
+  }, [activeSequence, collectMatchKeys, displayEvents, selectedEvent, sequenceToDisplayIndex]);
+
+  const handleCircleSelect = useCallback(
+    (selection: CircleSelection) => {
+      const primaryIndex = sequenceToDisplayIndex.get(selection.latestSequence);
+      const fallbackIndex = sequenceToDisplayIndex.get(selection.primarySequence);
+      const index = primaryIndex ?? fallbackIndex;
+      if (index === undefined) {
+        return;
+      }
+      const display = displayEvents[index];
+      if (!display) {
+        return;
+      }
+      const matchKeys = collectMatchKeys(display);
+      setSelectedEvent({
+        sourceSequence: selection.latestSequence,
+        timelineSequence: display.event.sequence,
+        matchKeys,
+      });
+      virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "smooth" });
+    },
+    [collectMatchKeys, displayEvents, sequenceToDisplayIndex]
+  );
 
   const renderDisplayEvent = (display: DisplayEventSnapshot) => {
     const { event, subtype, aggregated } = display;
@@ -156,9 +224,22 @@ export default function App() {
       (event.sequence === activeSequence ||
         aggregated?.events.some((segment) => segment.sequence === activeSequence));
 
-    const isSelected = selectedSequence === event.sequence;
+    const isSelected = selectedEvent
+      ? selectedEvent.timelineSequence === event.sequence ||
+        aggregated?.events.some((segment) => segment.sequence === selectedEvent.sourceSequence)
+      : false;
     const handleSelect = () => {
-      setSelectedSequence((prev) => (prev === event.sequence ? null : event.sequence));
+      setSelectedEvent((prev) => {
+        if (prev && prev.timelineSequence === event.sequence) {
+          return null;
+        }
+        const matchKeys = collectMatchKeys(display);
+        return {
+          sourceSequence: event.sequence,
+          timelineSequence: event.sequence,
+          matchKeys,
+        } satisfies SelectedEventState;
+      });
     };
 
     return (
@@ -227,7 +308,7 @@ export default function App() {
         <h1>Codex Agent Visualizer</h1>
         <div className="status">WebSocket status: {connectionStatus}</div>
       </header>
-      <VisualizerSketch />
+      <VisualizerSketch highlightKeys={highlightKeys} onCircleSelect={handleCircleSelect} />
       <ReplayControls eventCount={events.length} />
       <main className="timeline">
         {displayEvents.length === 0 ? (

@@ -57,6 +57,9 @@ export type ReplayCircle = {
   chargingStart: number;
   launchTime: number | null;
   stackIndex: number;
+  matchKey: string;
+  primarySequence: number;
+  latestSequence: number;
 };
 
 export type ReplayState = {

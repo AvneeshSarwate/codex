@@ -1,11 +1,27 @@
 import { useEffect, useRef } from "react";
-import p5 from "p5";
-import { createVisualizerSketch, SKETCH_HEIGHT, SKETCH_WIDTH } from "./visualizerSketch/createSketch";
+import {
+  SKETCH_HEIGHT,
+  SKETCH_WIDTH,
+  VisualizerAnimationController,
+} from "./visualizerSketch/animationController";
+import { CircleSelection, KonvaStageManager } from "./visualizerSketch/konvaManager";
 import { Launcher } from "./visualizerSketch/launcher";
 
-export function VisualizerSketch() {
+type VisualizerSketchProps = {
+  highlightKeys: Set<string>;
+  onCircleSelect: (selection: CircleSelection) => void;
+};
+
+export function VisualizerSketch({ highlightKeys, onCircleSelect }: VisualizerSketchProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const launcherRef = useRef<Launcher | null>(null);
+  const managerRef = useRef<KonvaStageManager | null>(null);
+  const controllerRef = useRef<VisualizerAnimationController | null>(null);
+  const onCircleSelectRef = useRef(onCircleSelect);
+
+  useEffect(() => {
+    onCircleSelectRef.current = onCircleSelect;
+  }, [onCircleSelect]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -17,13 +33,41 @@ export function VisualizerSketch() {
       launcherRef.current = new Launcher();
     }
 
-    const sketch = createVisualizerSketch(launcherRef.current);
-    const instance = new p5(sketch, container);
+    const manager = new KonvaStageManager(container);
+    managerRef.current = manager;
+    manager.setSelectionListener((selection) => {
+      onCircleSelectRef.current(selection);
+    });
+
+    const controller = new VisualizerAnimationController(launcherRef.current, (frame) => {
+      manager.applyFrame(frame);
+    });
+    controllerRef.current = controller;
+
+    let rafId = 0;
+    const tick = () => {
+      const nowSeconds =
+        typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now() / 1000
+          : Date.now() / 1000;
+      controller.tick(nowSeconds);
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
 
     return () => {
-      instance.remove();
+      window.cancelAnimationFrame(rafId);
+      manager.setSelectionListener(null);
+      manager.destroy();
+      managerRef.current = null;
+      controllerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    managerRef.current?.setHighlightKeys(highlightKeys);
+  }, [highlightKeys]);
 
   return (
     <div className="visualizer-sketch" style={{ width: `${SKETCH_WIDTH}px`, height: `${SKETCH_HEIGHT}px` }}>
