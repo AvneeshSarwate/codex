@@ -8,11 +8,11 @@ import { CircleSelection, KonvaStageManager } from "./visualizerSketch/konvaMana
 import { Launcher } from "./visualizerSketch/launcher";
 
 type VisualizerSketchProps = {
-  highlightKeys: Set<string>;
+  highlightSequences: Set<number>;
   onCircleSelect: (selection: CircleSelection) => void;
 };
 
-export function VisualizerSketch({ highlightKeys, onCircleSelect }: VisualizerSketchProps) {
+export function VisualizerSketch({ highlightSequences, onCircleSelect }: VisualizerSketchProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const launcherRef = useRef<Launcher | null>(null);
   const managerRef = useRef<KonvaStageManager | null>(null);
@@ -66,8 +66,8 @@ export function VisualizerSketch({ highlightKeys, onCircleSelect }: VisualizerSk
   }, []);
 
   useEffect(() => {
-    managerRef.current?.setHighlightKeys(highlightKeys);
-  }, [highlightKeys]);
+    managerRef.current?.setHighlightSequences(highlightSequences);
+  }, [highlightSequences]);
 
   return (
     <div className="visualizer-sketch" style={{ width: `${SKETCH_WIDTH}px`, height: `${SKETCH_HEIGHT}px` }}>

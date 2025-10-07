@@ -8,7 +8,6 @@ const HIGHLIGHT_STROKE = "#ffffff";
 const HIGHLIGHT_EXTRA_RADIUS = 6;
 
 export type CircleSelection = {
-  matchKey: string;
   primarySequence: number;
   latestSequence: number;
 };
@@ -24,7 +23,7 @@ export class KonvaStageManager {
   private readonly backgroundLayer: Konva.Layer;
   private readonly circleLayer: Konva.Layer;
   private readonly circles = new Map<string, CircleNode>();
-  private highlightKeys = new Set<string>();
+  private highlightSequences = new Set<number>();
   private selectListener: ((selection: CircleSelection) => void) | null = null;
   private disposed = false;
 
@@ -57,8 +56,8 @@ export class KonvaStageManager {
     this.selectListener = listener;
   }
 
-  setHighlightKeys(keys: Set<string>) {
-    this.highlightKeys = new Set(keys);
+  setHighlightSequences(sequences: Set<number>) {
+    this.highlightSequences = new Set(sequences);
     this.updateHighlights();
   }
 
@@ -98,7 +97,7 @@ export class KonvaStageManager {
     const x = snapshot.x * SKETCH_WIDTH;
     const y = snapshot.y * SKETCH_HEIGHT;
     const strokeWidth = snapshot.state === "flying" ? 3 : 2;
-    const highlight = this.highlightKeys.has(snapshot.matchKey);
+    const highlight = this.shouldHighlight(snapshot);
 
     const node = this.circles.get(snapshot.id);
     if (!node) {
@@ -179,7 +178,6 @@ export class KonvaStageManager {
       return;
     }
     this.selectListener({
-      matchKey: snapshot.matchKey,
       primarySequence: snapshot.primarySequence,
       latestSequence: snapshot.latestSequence,
     });
@@ -190,7 +188,7 @@ export class KonvaStageManager {
       const radius = node.snapshot.radius * CANVAS_SCALE;
       const x = node.snapshot.x * SKETCH_WIDTH;
       const y = node.snapshot.y * SKETCH_HEIGHT;
-      const highlight = this.highlightKeys.has(node.snapshot.matchKey);
+      const highlight = this.shouldHighlight(node.snapshot);
       if (highlight) {
         if (!node.highlight) {
           node.highlight = this.createHighlightCircle(x, y, radius + HIGHLIGHT_EXTRA_RADIUS);
@@ -207,6 +205,20 @@ export class KonvaStageManager {
       }
     }
     this.circleLayer.batchDraw();
+  }
+
+  private shouldHighlight(snapshot: CircleSnapshot): boolean {
+    if (this.highlightSequences.size === 0) {
+      return false;
+    }
+    const minSequence = Math.min(snapshot.primarySequence, snapshot.latestSequence);
+    const maxSequence = Math.max(snapshot.primarySequence, snapshot.latestSequence);
+    for (const sequence of this.highlightSequences) {
+      if (sequence >= minSequence && sequence <= maxSequence) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private drawBackground() {
