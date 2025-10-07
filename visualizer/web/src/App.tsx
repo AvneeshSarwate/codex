@@ -1,5 +1,5 @@
 import type { Snapshot } from "valtio";
-import { CSSProperties, useEffect, useMemo, useRef } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { actionBackground, colorForAction, stateBackground } from "./theme";
@@ -31,6 +31,7 @@ export default function App() {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousModeRef = useRef(replay.mode);
   const prevLengthRef = useRef(-1);
+  const [selectedSequence, setSelectedSequence] = useState<number | null>(null);
 
   const followOutput = replay.mode === "live" ? "auto" : false;
 
@@ -106,12 +107,21 @@ export default function App() {
   }, [activeReplayIndex, replay.mode, replay.status]);
 
   const activeSequence = useMemo(() => {
+    if (selectedSequence !== null) {
+      return selectedSequence;
+    }
     if (replay.mode !== "replay" || replay.cursor < 0) {
       return null;
     }
     const target = replay.buffer[replay.cursor];
     return target ? target.sequence : null;
-  }, [replay.buffer, replay.cursor, replay.mode]);
+  }, [replay.buffer, replay.cursor, replay.mode, selectedSequence]);
+
+  useEffect(() => {
+    if (replay.mode === "live") {
+      setSelectedSequence(null);
+    }
+  }, [replay.mode]);
 
   const renderDisplayEvent = (display: DisplayEventSnapshot) => {
     const { event, subtype, aggregated } = display;
@@ -146,13 +156,18 @@ export default function App() {
       (event.sequence === activeSequence ||
         aggregated?.events.some((segment) => segment.sequence === activeSequence));
 
+    const isSelected = selectedSequence === event.sequence;
+    const handleSelect = () => {
+      setSelectedSequence((prev) => (prev === event.sequence ? null : event.sequence));
+    };
+
     return (
-      <details
-        className={`event-item${isActive ? " event-item-active" : ""}`}
+      <div
+        className={`event-item${isActive ? " event-item-active" : ""}${isSelected ? " event-item-selected" : ""}`}
         key={`${event.sequence}-${event.timestampMs}`}
         style={accentStyle}
       >
-        <summary className="event-summary">
+        <button className="event-header" type="button" onClick={handleSelect}>
           <div className="event-summary-main">
             <span className="event-summary-title">
               <span>{event.actionType}</span>
@@ -171,35 +186,38 @@ export default function App() {
             <span>{formatTimestamp(event.timestampMs)}</span>
             {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
           </div>
-        </summary>
-        <div className="event-content">
-          <section className="event-action" style={{ borderLeftColor: color, background: actionBackground }}>
-            <h2>{titleText}</h2>
-            <div className="event-meta">
-              <span>{formatTimestamp(event.timestampMs)}</span>
-              {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
-            </div>
-            {aggregated ? (
-              <div className="event-delta-aggregate">
-                <h3>Aggregated delta ({aggregated.events.length} segments)</h3>
-                <pre className="event-delta-text">{aggregated.combinedText}</pre>
+        </button>
+        <details className="event-details">
+          <summary className="event-details-summary">View details</summary>
+          <div className="event-content">
+            <section className="event-action" style={{ borderLeftColor: color, background: actionBackground }}>
+              <h2>{titleText}</h2>
+              <div className="event-meta">
+                <span>{formatTimestamp(event.timestampMs)}</span>
+                {event.conversationId ? <span>Conversation: {event.conversationId}</span> : null}
               </div>
-            ) : null}
-            {aggregated ? (
-              <details className="event-json-details">
-                <summary>Raw aggregated payload</summary>
-                {actionJson}
-              </details>
-            ) : (
-              actionJson
-            )}
-          </section>
-          <section className="event-state" style={{ background: stateBackground }}>
-            <h2>State after action</h2>
-            <pre className="state-json">{stringify(event.state ?? {})}</pre>
-          </section>
-        </div>
-      </details>
+              {aggregated ? (
+                <div className="event-delta-aggregate">
+                  <h3>Aggregated delta ({aggregated.events.length} segments)</h3>
+                  <pre className="event-delta-text">{aggregated.combinedText}</pre>
+                </div>
+              ) : null}
+              {aggregated ? (
+                <details className="event-json-details">
+                  <summary>Raw aggregated payload</summary>
+                  {actionJson}
+                </details>
+              ) : (
+                actionJson
+              )}
+            </section>
+            <section className="event-state" style={{ background: stateBackground }}>
+              <h2>State after action</h2>
+              <pre className="state-json">{stringify(event.state ?? {})}</pre>
+            </section>
+          </div>
+        </details>
+      </div>
     );
   };
 
