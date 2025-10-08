@@ -2,6 +2,8 @@
 
 This is a fork of codex that adds a local web application to visualize all of the various agent events and actions. The core Rust codebase is functionally the same, except for sending events to a local node.js websocket server. A local web application listens for these events bounced from the websocket server and visualizes them. 
 
+[DEMO VIDEO](https://www.dropbox.com/scl/fi/nzwbb80yd0xd7ultqfjvr/codex_log_viewer.mp4?rlkey=5jy2i6rgr9ubqebw4m2ednvu4&dl=0)
+
 To bring up the visualizer locally:
 1. Start the websocket relay: `cd visualizer/server && npm install && npm run start` (listens on port 4100 by default, override with `CODEX_VISUALIZER_PORT`).
 2. Launch the web UI: `cd visualizer/web && npm install && npm run dev` (served via Vite on http://localhost:4173).
