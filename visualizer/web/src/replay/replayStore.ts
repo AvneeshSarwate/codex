@@ -45,6 +45,7 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
   const circles: ReplayCircle[] = [];
   const active = new Map<string, ActiveReplayCharge>();
   const launchStacks = new Map<number, number>();
+  const bucketMs = 33;
 
   for (const event of events) {
     const subtype = eventSubtype(event);
@@ -76,7 +77,7 @@ function buildReplayCircles(events: ReplayEvent[]): ReplayCircle[] {
       continue;
     }
 
-    const stackKey = Math.round(time * 1000);
+    const stackKey = Math.floor((time * 1000) / bucketMs);
     const stackIndex = launchStacks.get(stackKey) ?? 0;
     launchStacks.set(stackKey, stackIndex + 1);
 
